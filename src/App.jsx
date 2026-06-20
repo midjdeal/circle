@@ -856,6 +856,7 @@ function authErrorMessage(e) {
     "auth/too-many-requests": "Too many attempts — please wait a moment and try again.",
     "auth/network-request-failed": "Network error — check your connection and try again.",
     "auth/user-disabled": "This account has been disabled.",
+    "auth/operation-not-allowed": "This sign-in method isn't enabled yet — check Authentication → Sign-in method in the Firebase Console.",
   };
   return map[code] || "Something went wrong — please try again.";
 }
@@ -893,8 +894,10 @@ function SignupForm({ onSubmitApplication, onBackToSignIn }) {
     setError("");
     setSubmitting(true);
     const cleanHandle = form.instagramHandle.replace(/^@/,"");
+    let createdAccount = false;
     try {
       const cred = await createUserWithEmailAndPassword(auth, form.email, form.password);
+      createdAccount = true;
       await setDoc(doc(db, "users", cred.user.uid), {
         name: form.name,
         email: form.email,
@@ -915,12 +918,20 @@ function SignupForm({ onSubmitApplication, onBackToSignIn }) {
         joined: new Date().toISOString().slice(0,10),
         createdAt: serverTimestamp(),
       });
-      await signOut(auth);
       onSubmitApplication && onSubmitApplication({ name:form.name, email:form.email, instagramHandle:cleanHandle, contentType:form.contentType });
       setSubmitted(true);
     } catch (e) {
       setError(authErrorMessage(e));
     } finally {
+      // Always sign back out if an account was created, even if the profile
+      // write failed partway through (e.g. Firestore rules rejecting the
+      // write) — otherwise a failed signup leaves the browser silently
+      // signed into a profile-less account, which then trips App.jsx's
+      // onAuthStateChanged listener into its own separate error state on
+      // the next render.
+      if (createdAccount) {
+        try { await signOut(auth); } catch (signOutErr) { /* best effort */ }
+      }
       setSubmitting(false);
     }
   };
