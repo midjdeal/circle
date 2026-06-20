@@ -1,9 +1,82 @@
 rules_version = '2';
 
+// firestore.rules — CreatorCircle
+//
+// Deploy with:
+//   firebase deploy --only firestore:rules
+//
+// Data model this assumes (see creator-support-circle.jsx and
+// seed-sandbox-data.js):
+//   users/{uid}    — one doc per person: profile fields (name, handle, bio,
+//                    email, plan, provider) AND moderation/admin fields
+//                    (status, role, circle, points, supportCount, verified,
+//                    verifiedAtSupportCount, verifiedAt). Doc id is the
+//                    Firebase Auth uid for self-signed-up members, or an
+//                    admin-assigned id for members an admin added manually
+//                    (see MembersTab.save() in the app).
+//   users/{uid}/pushSubscriptions/{subId} — Web Push subscriptions, written
+//                    by the savePushSubscription Cloud Function only.
+//   circles/{key}  — engagement-pod circles (doc id matches the existing
+//                    "A"/"B"/"C"/"D"/"E" key field).
+//   queue/{id}     — submissions awaiting admin review.
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if false;
+
+    // True if the requesting user's own profile doc has an admin-level role.
+    // Checked via get() rather than a custom claim so role changes (e.g.
+    // promoting someone to moderator from the Team tab) take effect
+    // immediately without the user needing to sign in again.
+    function isAdmin(uid) {
+      return exists(/databases/$(database)/documents/users/$(uid)) &&
+        get(/databases/$(database)/documents/users/$(uid)).data.role in
+          ['admin', 'moderator', 'superadmin'];
+    }
+
+    match /users/{userId} {
+      // Any signed-in member can read any profile — needed for the member
+      // directory, circle rosters, and leaderboard-style views.
+      allow read: if request.auth != null;
+
+      // Self-signup: SignupForm and the Google-first-login auto-provision
+      // both create their own doc, keyed by their own uid.
+      allow create: if request.auth != null && request.auth.uid == userId;
+
+      // A member can update their own doc (profile edits, plan changes);
+      // admins/moderators can update anyone's (approvals, point
+      // adjustments, verification, role changes).
+      allow update: if request.auth != null &&
+        (request.auth.uid == userId || isAdmin(request.auth.uid));
+
+      allow delete: if request.auth != null && isAdmin(request.auth.uid);
+
+      match /pushSubscriptions/{subId} {
+        // Only the savePushSubscription Cloud Function (running with admin
+        // privileges, which bypasses these rules entirely) should write
+        // here — client access is read-only for the owning user, mainly
+        // useful for debugging "do I have an active subscription" in
+        // DevTools.
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if false;
+      }
+    }
+
+    match /circles/{circleId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && isAdmin(request.auth.uid);
+    }
+
+    match /queue/{queueId} {
+      allow read: if request.auth != null;
+
+      // Any signed-in member can submit a post.
+      allow create: if request.auth != null;
+
+      // Admins/moderators approve or reject (which deletes the doc — see
+      // QueueTab.approve()/reject() in the app); the original submitter can
+      // also edit or withdraw their own still-pending submission.
+      allow update, delete: if request.auth != null &&
+        (isAdmin(request.auth.uid) || request.auth.uid == resource.data.submitterUid);
     }
   }
 }

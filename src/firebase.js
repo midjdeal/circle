@@ -10,7 +10,7 @@
 
 import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
-import { getAuth } from "firebase/auth";
+import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
 
@@ -31,6 +31,9 @@ export const app = initializeApp(firebaseConfig);
 export const analytics = typeof window !== "undefined" ? getAnalytics(app) : null;
 
 export const auth = getAuth(app);
+// One shared GoogleAuthProvider instance — signInWithPopup(auth, googleProvider)
+// is called from LoginScreen.
+export const googleProvider = new GoogleAuthProvider();
 export const db = getFirestore(app);
 export const functions = getFunctions(app);
 
