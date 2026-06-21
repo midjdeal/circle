@@ -56,11 +56,14 @@ service cloud.firestore {
     // above addPoints() in creator-support-circle.jsx for how the app
     // handles this (those actions are local-only/optimistic, not
     // persisted, until a verified server-side awarding path exists).
+    // email is intentionally NOT in this list — EditProfileScreen disables
+    // the field in the UI, and this is the matching server-side
+    // enforcement so it can't be changed via a direct API call either.
     function selfEditableFields() {
-      return ['name', 'handle', 'username', 'bio', 'email', 'plan',
+      return ['name', 'handle', 'username', 'bio', 'plan',
               'contentType', 'notifPrefs', 'iban', 'referrals', 'affiliates',
               'automations', 'safetySettings', 'igConnection',
-              'hasAutoReplyAddon'];
+              'hasAutoReplyAddon', 'photoURL'];
     }
 
     function onlySelfEditableFieldsChanged() {
