@@ -127,11 +127,29 @@ service cloud.firestore {
       // Any signed-in member can submit a post.
       allow create: if request.auth != null;
 
-      // Admins/moderators approve or reject (which deletes the doc — see
-      // QueueTab.approve()/reject() in the app); the original submitter can
-      // also edit or withdraw their own still-pending submission.
-      allow update, delete: if request.auth != null &&
+      // Admins/moderators approve or reject (status flips to
+      // "approved"/"rejected" — the doc stays around permanently so a
+      // member's own History tab and the public approved-posts feed both
+      // have something real to show; see QueueTab.approve()/reject() in
+      // the app). The original submitter can also edit or withdraw their
+      // own still-pending submission. Any other signed-in member can ONLY
+      // touch confirmedCount/confirmedBy, and only to add their own uid
+      // exactly once and bump the count by exactly 1 — see
+      // isValidConfirmation() below. That's what lets HomeScreen's
+      // "Confirm support" button work for an approved post that isn't
+      // theirs, without opening the door to editing anything else on it.
+      allow update: if request.auth != null &&
+        (isAdmin(request.auth.uid) || request.auth.uid == resource.data.submitterUid || isValidConfirmation());
+      allow delete: if request.auth != null &&
         (isAdmin(request.auth.uid) || request.auth.uid == resource.data.submitterUid);
+    }
+
+    function isValidConfirmation() {
+      let diffKeys = request.resource.data.diff(resource.data).affectedKeys();
+      return diffKeys.hasOnly(['confirmedCount', 'confirmedBy']) &&
+        !(request.auth.uid in resource.data.confirmedBy) &&
+        request.auth.uid in request.resource.data.confirmedBy &&
+        request.resource.data.confirmedCount == resource.data.confirmedCount + 1;
     }
 
     match /cashoutRequests/{requestId} {
