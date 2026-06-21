@@ -5,32 +5,56 @@ rules_version = '2';
 // Deploy with:
 //   firebase deploy --only firestore:rules
 //
-// Data model this assumes (see creator-support-circle.jsx and
-// seed-sandbox-data.js):
-//   users/{uid}    — one doc per person: profile fields (name, handle, bio,
-//                    email, plan, provider) AND moderation/admin fields
-//                    (status, role, circle, points, supportCount, verified,
-//                    verifiedAtSupportCount, verifiedAt). Doc id is the
-//                    Firebase Auth uid for self-signed-up members, or an
-//                    admin-assigned id for members an admin added manually
-//                    (see MembersTab.save() in the app).
-//   users/{uid}/pushSubscriptions/{subId} — Web Push subscriptions, written
-//                    by the savePushSubscription Cloud Function only.
-//   circles/{key}  — engagement-pod circles (doc id matches the existing
-//                    "A"/"B"/"C"/"D"/"E" key field).
-//   queue/{id}     — submissions awaiting admin review.
+// ── SECURITY MODEL ──────────────────────────────────────────────────────────
+// Every signed-in user can read broadly (member directories, circles, queue,
+// activity log) since this is a community app where members see each
+// other's stats/handles. WRITES are the security boundary, and the most
+// important rule in this file is the one on users/{userId}: a user can only
+// ever touch a fixed allow-list of "self-service" fields on their own doc
+// (selfEditableFields() below). Anything else — role, status, points,
+// verified, etc. — can only be changed by an existing admin/moderator.
+// Without that allow-list, a signed-in user could call updateDoc() with
+// { role: "superadmin" } on their own doc from the browser console and grant
+// themselves admin access — this file exists specifically to prevent that.
 
 service cloud.firestore {
   match /databases/{database}/documents {
 
     // True if the requesting user's own profile doc has an admin-level role.
     // Checked via get() rather than a custom claim so role changes (e.g.
-    // promoting someone to moderator from the Team tab) take effect
-    // immediately without the user needing to sign in again.
+    // promoting someone from the Team tab) take effect immediately without
+    // the user needing to sign in again.
     function isAdmin(uid) {
       return exists(/databases/$(database)/documents/users/$(uid)) &&
         get(/databases/$(database)/documents/users/$(uid)).data.role in
           ['admin', 'moderator', 'superadmin'];
+    }
+
+    function isSuperAdmin(uid) {
+      return exists(/databases/$(database)/documents/users/$(uid)) &&
+        get(/databases/$(database)/documents/users/$(uid)).data.role == 'superadmin';
+    }
+
+    // Fields a member may change on their OWN profile doc. Deliberately
+    // excludes: role, status, circle, points, supportCount, verified,
+    // verifiedAtSupportCount, verifiedAt, approvedBy, walletBalance,
+    // provider, joined, createdAt — all of those are admin/system-only.
+    // points specifically is excluded even for self-service actions like
+    // "confirm support" or referral bonuses, because a direct client write
+    // has no way to verify the action actually happened — see the comment
+    // above addPoints() in creator-support-circle.jsx for how the app
+    // handles this (those actions are local-only/optimistic, not
+    // persisted, until a verified server-side awarding path exists).
+    function selfEditableFields() {
+      return ['name', 'handle', 'username', 'bio', 'email', 'plan',
+              'contentType', 'notifPrefs', 'iban', 'referrals', 'affiliates',
+              'automations', 'safetySettings', 'igConnection',
+              'hasAutoReplyAddon'];
+    }
+
+    function onlySelfEditableFieldsChanged() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(selfEditableFields());
     }
 
     match /users/{userId} {
@@ -42,11 +66,14 @@ service cloud.firestore {
       // both create their own doc, keyed by their own uid.
       allow create: if request.auth != null && request.auth.uid == userId;
 
-      // A member can update their own doc (profile edits, plan changes);
-      // admins/moderators can update anyone's (approvals, point
-      // adjustments, verification, role changes).
-      allow update: if request.auth != null &&
-        (request.auth.uid == userId || isAdmin(request.auth.uid));
+      // A member can update ONLY the self-service fields on their own doc
+      // (profile edits, settings, etc.) — see selfEditableFields() above.
+      // Admins/moderators can update anyone's doc with no field
+      // restriction (approvals, point adjustments, role changes, etc.).
+      allow update: if request.auth != null && (
+        (request.auth.uid == userId && onlySelfEditableFieldsChanged()) ||
+        isAdmin(request.auth.uid)
+      );
 
       allow delete: if request.auth != null && isAdmin(request.auth.uid);
 
@@ -59,9 +86,26 @@ service cloud.firestore {
         allow read: if request.auth != null && request.auth.uid == userId;
         allow write: if false;
       }
+
+      match /notifications/{notificationId} {
+        // A user reads/manages (marking read, etc.) only their own
+        // notifications. Creating a notification FOR this user is allowed
+        // for any signed-in user — that's what lets e.g. an admin approving
+        // someone else's queue submission write a notification into THAT
+        // submitter's subcollection (see notifyUser() in the app). It's
+        // intentionally not restricted to admins only, since member-to-
+        // member notifications (future feature) would need the same path.
+        allow read, update, delete: if request.auth != null && request.auth.uid == userId;
+        allow create: if request.auth != null;
+      }
     }
 
     match /circles/{circleId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && isAdmin(request.auth.uid);
+    }
+
+    match /plans/{planKey} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && isAdmin(request.auth.uid);
     }
@@ -77,6 +121,48 @@ service cloud.firestore {
       // also edit or withdraw their own still-pending submission.
       allow update, delete: if request.auth != null &&
         (isAdmin(request.auth.uid) || request.auth.uid == resource.data.submitterUid);
+    }
+
+    match /cashoutRequests/{requestId} {
+      // Admins need to see every request to process payouts; a member only
+      // needs to see their own (the app already only queries/displays the
+      // logged-in user's own requests, but this is the actual enforcement).
+      allow read: if request.auth != null &&
+        (isAdmin(request.auth.uid) || request.auth.uid == resource.data.uid);
+
+      // A member can create their own cashout request (uid must match their
+      // own — they can't file a request on someone else's behalf).
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.uid;
+
+      // Only an admin marks a request paid/converted.
+      allow update, delete: if request.auth != null && isAdmin(request.auth.uid);
+    }
+
+    match /team/{teamId} {
+      // "team" is an admin-managed staff directory used to pre-assign a
+      // role to an email address before that person has even signed up —
+      // see the onAuthStateChanged profile-creation logic in the app for
+      // how a matching email gets its role applied on first login.
+      // Superadmins can read/write the whole list. A signed-in user may
+      // ALSO read only the single team doc matching their own verified
+      // auth token email — that's what lets a brand-new sign-in check "was
+      // I pre-assigned a role?" without granting general visibility into
+      // the rest of the staff directory. request.auth.token.email comes
+      // from the Firebase Auth token itself (populated for both Google and
+      // email/password sign-in), not from client-supplied data, so this
+      // can't be spoofed to read someone else's entry.
+      allow read: if request.auth != null &&
+        (isSuperAdmin(request.auth.uid) || request.auth.token.email == resource.data.email);
+      allow write: if request.auth != null && isSuperAdmin(request.auth.uid);
+    }
+
+    match /activityLog/{logId} {
+      // Audit log of admin actions — readable and writable by any
+      // admin/moderator (any staff action can generate a log entry); not
+      // readable by regular members.
+      allow read: if request.auth != null && isAdmin(request.auth.uid);
+      allow create: if request.auth != null && isAdmin(request.auth.uid);
+      allow update, delete: if false; // audit logs are append-only
     }
   }
 }
