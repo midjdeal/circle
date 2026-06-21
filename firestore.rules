@@ -35,6 +35,17 @@ service cloud.firestore {
         get(/databases/$(database)/documents/users/$(uid)).data.role == 'superadmin';
     }
 
+    // "support" role is intentionally excluded from isAdmin() (it can't
+    // moderate the queue, manage members, or touch payouts) but its whole
+    // purpose is handling support tickets, so it needs the same "see every
+    // ticket" visibility an admin/moderator gets — just scoped to this one
+    // collection.
+    function isSupportStaff(uid) {
+      return exists(/databases/$(database)/documents/users/$(uid)) &&
+        get(/databases/$(database)/documents/users/$(uid)).data.role in
+          ['support', 'admin', 'moderator', 'superadmin'];
+    }
+
     // Fields a member may change on their OWN profile doc. Deliberately
     // excludes: role, status, circle, points, supportCount, verified,
     // verifiedAtSupportCount, verifiedAt, approvedBy, walletBalance,
@@ -163,6 +174,34 @@ service cloud.firestore {
       allow read: if request.auth != null && isAdmin(request.auth.uid);
       allow create: if request.auth != null && isAdmin(request.auth.uid);
       allow update, delete: if false; // audit logs are append-only
+    }
+
+    match /supportTickets/{ticketId} {
+      // A member sees only their own tickets; support/admin/moderator/
+      // superadmin all see every ticket (see isSupportStaff() above for why
+      // "support" specifically gets this despite not being a general
+      // admin). Both sides can update (append a reply message, change
+      // status) — there's no field-level restriction here like users/{uid}
+      // has, because the worst case of a member tampering with their own
+      // ticket (e.g. marking it resolved early) only affects their own
+      // support experience, not anyone else's data or money.
+      allow read: if request.auth != null &&
+        (isSupportStaff(request.auth.uid) || request.auth.uid == resource.data.requesterUid);
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.requesterUid;
+      allow update: if request.auth != null &&
+        (isSupportStaff(request.auth.uid) || request.auth.uid == resource.data.requesterUid);
+      allow delete: if request.auth != null && isAdmin(request.auth.uid);
+    }
+
+    match /submissionCooldowns/{uid} {
+      // Tracks each member's own per-circle "last submitted at" timestamps
+      // (used to enforce the weekly submission cooldown — see
+      // recordSubmission in the app). Self-only, both read and write: a
+      // user resetting their own cooldown via a direct API call is a
+      // low-stakes self-only exploit (actual content moderation still goes
+      // through real admin approval in the queue regardless), not worth
+      // the complexity of enforcing server-timestamp-only writes here.
+      allow read, write: if request.auth != null && request.auth.uid == uid;
     }
   }
 }
