@@ -5,7 +5,7 @@ import {
 } from "firebase/auth";
 import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc, getDocs,
-  serverTimestamp, query, where, increment,
+  serverTimestamp, query, where, increment, arrayUnion,
 } from "firebase/firestore";
 import { auth, db, googleProvider, savePushSubscription } from "./firebase";
 
@@ -702,29 +702,6 @@ const fmtTime = d => {
   if (sameDay) return date.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" });
   return date.toLocaleDateString([], { month:"short", day:"numeric" });
 };
-
-const SUPPORT_TICKETS_DATA = [
-  {
-    id:"tk1", subject:"Payout not received", status:"resolved", unread:false,
-    requester:"Alex Rivera", requesterHandle:"@alexrivera.creates",
-    createdAt: new Date(Date.now()-6*24*60*60*1000),
-    messages:[
-      { id:"tk1m1", from:"user",    text:"Hi, I requested a cashout 5 days ago and haven't received it yet.", time:new Date(Date.now()-6*24*60*60*1000) },
-      { id:"tk1m2", from:"support", author:"Maria", text:"Hey! Sorry about that — I checked your account and the transfer was delayed on our end. It's been sent now, you should see it within 1-2 business days.", time:new Date(Date.now()-5*24*60*60*1000) },
-      { id:"tk1m3", from:"user",    text:"Got it, thank you!", time:new Date(Date.now()-5*24*60*60*1000+3600000) },
-      { id:"tk1m4", from:"support", author:"Maria", text:"You're welcome! Marking this as resolved — feel free to reopen if anything else comes up.", time:new Date(Date.now()-5*24*60*60*1000+4000000) },
-    ],
-  },
-  {
-    id:"tk2", subject:"Question about Circle B rules", status:"open", unread:true,
-    requester:"Alex Rivera", requesterHandle:"@alexrivera.creates",
-    createdAt: new Date(Date.now()-2*60*60*1000),
-    messages:[
-      { id:"tk2m1", from:"user",    text:"Do I need to comment AND like, or is liking enough to confirm a support action?", time:new Date(Date.now()-2*60*60*1000) },
-      { id:"tk2m2", from:"support", author:"Leo", text:"Both — liking and commenting are required before you can confirm. This keeps engagement meaningful for the creator.", time:new Date(Date.now()-90*60*1000) },
-    ],
-  },
-];
 
 // ─── MULTI-CIRCLE SUBMISSIONS ──────────────────────────────────────────────────
 // Every circle allows at most 1 post per member per week, tracked independently
@@ -2127,7 +2104,7 @@ function NotificationPreferencesScreen({ prefs, setPrefs, onBack, pushPermission
   );
 }
 
-function SupportScreen({ tickets, setTickets, currentUser, pushNotification, onBack }) {
+function SupportScreen({ tickets, setTickets, currentUser, onBack }) {
   const [openTicketId, setOpenTicketId] = useState(null);
   const [creating, setCreating] = useState(false);
   const [newSubject, setNewSubject] = useState("");
@@ -2135,30 +2112,40 @@ function SupportScreen({ tickets, setTickets, currentUser, pushNotification, onB
   const [draft, setDraft] = useState("");
 
   const openTicket = tickets.find(t=>t.id===openTicketId);
-  const markRead = id => setTickets(ts => ts.map(t=>t.id===id?{...t,unread:false}:t));
+  const markRead = id => {
+    setTickets(ts => ts.map(t=>t.id===id?{...t,unread:false}:t));
+    updateDoc(doc(db, "supportTickets", id), { unread:false }).catch(e => console.warn("Failed to mark ticket read in Firestore:", e));
+  };
 
   const startTicket = () => {
-    if (!newSubject.trim() || !newMessage.trim()) return;
+    if (!newSubject.trim() || !newMessage.trim() || !currentUser?.uid) return;
     const id = `tk_${Date.now()}`;
-    setTickets(ts => [{
-      id, subject:newSubject.trim(), status:"open", unread:false, createdAt:new Date(),
-      requester: currentUser?.name || "Member", requesterHandle: currentUser?.handle || "",
-      messages:[{ id:`m_${Date.now()}`, from:"user", text:newMessage.trim(), time:new Date() }],
-    }, ...ts]);
+    const newTicket = {
+      id, subject:newSubject.trim(), status:"open", unread:false,
+      requester: currentUser?.name || "Member", requesterHandle: currentUser?.handle || "", requesterUid: currentUser.uid,
+      createdAt: serverTimestamp(),
+      messages:[{ id:`m_${Date.now()}`, from:"user", text:newMessage.trim(), time:new Date().toISOString() }],
+    };
+    setTickets(ts => [newTicket, ...ts]);
+    setDoc(doc(db, "supportTickets", id), newTicket).catch(e => console.warn("Failed to create support ticket in Firestore:", e));
     setCreating(false); setNewSubject(""); setNewMessage(""); setOpenTicketId(id);
   };
 
+  // Sends the member's own follow-up message. No more fake auto-reply here
+  // — a real admin/support staff member replies for real via
+  // AdminSupportTab, which arrives through the Firestore sync above
+  // (typically within moments if they're online, otherwise whenever they
+  // next check the Support tab) and triggers a real notifyUser() call, not
+  // a hardcoded setTimeout.
   const sendReply = () => {
     if (!draft.trim() || !openTicket) return;
     const id = openTicket.id;
-    const userMsg = { id:`m_${Date.now()}`, from:"user", text:draft.trim(), time:new Date() };
-    setTickets(ts => ts.map(t => t.id===id ? {...t, status: t.status==="resolved"?"open":t.status, messages:[...t.messages, userMsg]} : t));
+    const userMsg = { id:`m_${Date.now()}`, from:"user", text:draft.trim(), time:new Date().toISOString() };
+    const newStatus = openTicket.status==="resolved" ? "open" : openTicket.status;
+    setTickets(ts => ts.map(t => t.id===id ? {...t, status:newStatus, messages:[...t.messages, userMsg]} : t));
+    updateDoc(doc(db, "supportTickets", id), { status:newStatus, messages:arrayUnion(userMsg) })
+      .catch(e => console.warn("Failed to send ticket reply to Firestore:", e));
     setDraft("");
-    setTimeout(() => {
-      const replyText = "Thanks for the extra detail — taking a look now and we'll follow up shortly.";
-      setTickets(ts => ts.map(t => t.id===id ? {...t, status:"pending", unread:true, messages:[...t.messages, { id:`m_${Date.now()}_r`, from:"support", author:"Support", text:replyText, time:new Date() }]} : t));
-      pushNotification && pushNotification("bell", "Support replied", `${openTicket.subject}: ${replyText}`, null, "support");
-    }, 1400);
   };
 
   const statusColor = s => s==="resolved" ? C.green : s==="pending" ? C.amber : C.accent;
@@ -3464,7 +3451,7 @@ function PayoutsTab({ cashoutRequests, setCashoutRequests, logAction, notifyUser
   );
 }
 
-function AdminSupportTab({ tickets, setTickets, logAction, actorName, pushNotification }) {
+function AdminSupportTab({ tickets, setTickets, logAction, actorName, notifyUser }) {
   const [openTicketId, setOpenTicketId] = useState(null);
   const [statusFilter, setStatusFilter] = useState("All");
   const [draft, setDraft] = useState("");
@@ -3477,6 +3464,7 @@ function AdminSupportTab({ tickets, setTickets, logAction, actorName, pushNotifi
   const setStatus = (id, status) => {
     const t = tickets.find(x=>x.id===id);
     setTickets(ts => ts.map(x=>x.id===id?{...x,status}:x));
+    updateDoc(doc(db, "supportTickets", id), { status }).catch(e => console.warn("Failed to update ticket status in Firestore:", e));
     if (t) logAction && logAction("Updated ticket status", `${t.subject} → ${statusLabel(status)}`);
   };
 
@@ -3484,10 +3472,14 @@ function AdminSupportTab({ tickets, setTickets, logAction, actorName, pushNotifi
     if (!draft.trim() || !openTicket) return;
     const id = openTicket.id;
     const text = draft.trim();
-    const msg = { id:`m_${Date.now()}`, from:"support", author:actorName, text, time:new Date() };
+    const msg = { id:`m_${Date.now()}`, from:"support", author:actorName, text, time:new Date().toISOString() };
     setTickets(ts => ts.map(t => t.id===id ? {...t, status:"pending", unread:true, messages:[...t.messages, msg]} : t));
+    updateDoc(doc(db, "supportTickets", id), { status:"pending", unread:true, messages:arrayUnion(msg) })
+      .catch(e => console.warn("Failed to send ticket reply to Firestore:", e));
     logAction && logAction("Replied to ticket", openTicket.subject);
-    pushNotification && pushNotification("bell", `${actorName} replied`, `${openTicket.subject}: ${text}`, null, "support");
+    // Notifies the actual person who opened this ticket — not the admin
+    // replying to it. Same notifyUser() pattern as QueueTab approve/reject.
+    notifyUser && notifyUser(openTicket.requesterUid, "bell", `${actorName} replied`, `${openTicket.subject}: ${text}`, "support");
     setDraft("");
   };
 
@@ -3799,7 +3791,7 @@ function AdminScreen({ queue, setQueue, members, setMembers, circles, setCircles
       {tab==="circles" && <CirclesTab circles={circles} setCircles={setCircles} logAction={logAction}/>}
       {tab==="plans"   && <PlansTab   plans={plans} setPlans={setPlans}/>}
       {tab==="payouts" && <PayoutsTab cashoutRequests={cashoutRequests} setCashoutRequests={setCashoutRequests} logAction={logAction} notifyUser={notifyUser}/>}
-      {tab==="support" && <AdminSupportTab tickets={supportTickets} setTickets={setSupportTickets} logAction={logAction} actorName={actorName} pushNotification={pushNotification} notifyUser={notifyUser}/>}
+      {tab==="support" && <AdminSupportTab tickets={supportTickets} setTickets={setSupportTickets} logAction={logAction} actorName={actorName} notifyUser={notifyUser}/>}
       {tab==="team"    && isSuperAdmin && <TeamTab team={team} setTeam={setTeam} logAction={logAction}/>}
       {tab==="log"     && isSuperAdmin && <LogTab activityLog={activityLog}/>}
 
@@ -3948,10 +3940,12 @@ export default function App() {
   // local-only/optimistic rather than persisted) instead of a separate
   // local useState here.
 
-  // Weekly submission cooldown is tracked per circle (key -> last submission timestamp),
-  // not globally — Circle C is seeded as recently posted to so it's still on cooldown
-  // while A and B are open, to demonstrate the per-circle rule live.
-  const [lastSubmissionByCircle, setLastSubmissionByCircle] = useState({ C: Date.now() - 2*24*60*60*1000 });
+  // Weekly submission cooldown is tracked per circle (key -> last submission
+  // timestamp) on submissionCooldowns/{uid} in Firestore — see the sync
+  // effect further down and recordSubmission() for the write side. Used to
+  // be local-only state that reset on every page refresh, which meant the
+  // cooldown could be trivially bypassed; this closes that gap.
+  const [lastSubmissionByCircle, setLastSubmissionByCircle] = useState({});
 
   const [queue, setQueue] = useState([]);
   const [members, setMembers] = useState([]);
@@ -4301,7 +4295,11 @@ export default function App() {
   // from currentUser further up (with their setters writing through to
   // Firestore) — nothing to declare here.
 
-  const [supportTickets, setSupportTickets] = useState(SUPPORT_TICKETS_DATA);
+  // supportTickets is Firestore-synced (see the sync effect further down,
+  // gated on role: members see only their own tickets, admins see all) —
+  // no local mock fallback, an empty list is the correct state for someone
+  // with no open tickets.
+  const [supportTickets, setSupportTickets] = useState([]);
 
   // Role comes directly from currentUser.role — the same field
   // firestore.rules checks server-side — never from a fallback default.
@@ -4334,6 +4332,35 @@ export default function App() {
     }, err => console.warn("cashoutRequests sync failed:", err));
     return () => unsub();
   }, [loggedIn, currentUser?.uid, isAdminRole]);
+
+  // supportTickets: matches firestore.rules' isSupportStaff() — "support"
+  // role sees every ticket here even though it's excluded from isAdminRole
+  // (it can't moderate the queue/members/payouts, but ticket handling is
+  // its whole job) — so this is intentionally gated on isStaff, not
+  // isAdminRole.
+  useEffect(() => {
+    if (!loggedIn || !currentUser?.uid) return;
+    const q = isStaff
+      ? collection(db, "supportTickets")
+      : query(collection(db, "supportTickets"), where("requesterUid", "==", currentUser.uid));
+    const unsub = onSnapshot(q, snap => {
+      setSupportTickets(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, err => console.warn("supportTickets sync failed:", err));
+    return () => unsub();
+  }, [loggedIn, currentUser?.uid, isStaff]);
+
+  // submissionCooldowns/{uid} — self-only doc, see firestore.rules for why
+  // this is allowed to be self-writable despite the same "don't let
+  // anyone self-edit trust-sensitive fields" principle that keeps points
+  // locked down: bypassing your own cooldown doesn't grant any privilege
+  // or money, real moderation still happens at admin approval regardless.
+  useEffect(() => {
+    if (!loggedIn || !currentUser?.uid) return;
+    const unsub = onSnapshot(doc(db, "submissionCooldowns", currentUser.uid), snap => {
+      setLastSubmissionByCircle(snap.exists() ? snap.data() : {});
+    }, err => console.warn("submissionCooldowns sync failed:", err));
+    return () => unsub();
+  }, [loggedIn, currentUser?.uid]);
 
   // team and activityLog are both admin-only collections — only fetch them
   // for staff, both to avoid a guaranteed permission-denied console warning
@@ -4399,6 +4426,12 @@ export default function App() {
       circleKeys.forEach(k => { next[k] = now; });
       return next;
     });
+    if (currentUser?.uid) {
+      const cooldownUpdate = {};
+      circleKeys.forEach(k => { cooldownUpdate[k] = now; });
+      setDoc(doc(db, "submissionCooldowns", currentUser.uid), cooldownUpdate, { merge: true })
+        .catch(e => console.warn("Failed to save submission cooldown to Firestore:", e));
+    }
     const circleNames = circles.filter(c=>circleKeys.includes(c.key)).map(c=>c.name);
     pushNotification("sparkle", "Your post is live", `Now visible in ${circleNames.join(", ")||"your circle"} — circle members can start supporting it.`, "newPostInCircle", "home");
   };
@@ -4514,7 +4547,7 @@ export default function App() {
           {screen==="editProfile" && <EditProfileScreen currentUser={currentUser} onSave={handleSaveProfile} onBack={()=>setScreen("profile")}/>}
           {screen==="notifPrefs"  && <NotificationPreferencesScreen prefs={notifPrefs} setPrefs={setNotifPrefs} pushPermission={pushPermission} requestPushPermission={requestPushPermission} pushNotification={pushNotification} onBack={()=>setScreen("profile")}/>}
           {screen==="autoreply"   && <AutoReplyScreen currentUser={currentUser} hasAddon={autoReplyAddon} onPurchaseAddon={setAutoReplyAddon} onNav={setScreen} igConnection={igConnection} onConnectIg={setIgConnection} onDisconnectIg={()=>setIgConnection(null)} automations={automations} setAutomations={setAutomations} safety={safetySettings} setSafety={setSafetySettings}/>}
-          {screen==="support"     && <SupportScreen tickets={supportTickets} setTickets={setSupportTickets} currentUser={currentUser} pushNotification={pushNotification} onBack={()=>setScreen("profile")}/>}
+          {screen==="support"     && <SupportScreen tickets={supportTickets} setTickets={setSupportTickets} currentUser={currentUser} onBack={()=>setScreen("profile")}/>}
           {screen==="stats"       && <StatsScreen points={currentUser?.points||0} circles={circles} referrals={referrals} affiliates={affiliates} automations={automations} hasAutoReplyAddon={autoReplyAddon} currentUser={currentUser} onBack={()=>setScreen("profile")}/>}
           {screen==="profile"     && <ProfileScreen onNav={setScreen} points={currentUser?.points||0} circles={circles} currentUser={currentUser} referrals={referrals} setReferrals={setReferrals} affiliates={affiliates} walletBalance={walletBalance} setWalletBalance={setWalletBalance} iban={iban} setIban={setIban} cashoutRequests={cashoutRequests} setCashoutRequests={setCashoutRequests} addPoints={addPoints} pushNotification={pushNotification} onLogout={handleLogout}/>}
           {screen==="admin" && isStaff   && <AdminScreen   queue={queue} setQueue={setQueue} members={members} setMembers={setMembers} circles={circles} setCircles={setCircles} plans={plans} setPlans={setPlans} cashoutRequests={cashoutRequests} setCashoutRequests={setCashoutRequests} team={team} setTeam={setTeam} activityLog={activityLog} logAction={logAction} myRole={myRole} actorName={actorName} supportTickets={supportTickets} setSupportTickets={setSupportTickets} pushNotification={pushNotification} notifyUser={notifyUser}/>}
