@@ -483,17 +483,28 @@ const css = `
 `;
 
 // ─── DATA ─────────────────────────────────────────────────────────────────────
-const POSTS = [
-  { id:"1", handle:"@luxuria.photo", initials:"LP", avatarBg:"#7C6DB5", type:"Reel", topic:"Golden Hour in Santorini — travel BTS", circle:"Circle C", confirmed:34, target:50, time:"2h ago", done:false, url:"https://www.instagram.com/reel/Cz4f8aBlPm2/" },
-  { id:"2", handle:"@fithero_kai", initials:"FK", avatarBg:"rgba(255,107,107,0.6)", type:"Carousel", topic:"5 Morning Habits That Changed My Physique", circle:"Circle B", confirmed:47, target:50, time:"5h ago", done:false, url:"https://www.instagram.com/p/Cz1k2RvI9wQ/" },
-  { id:"3", handle:"@mindful.maya", initials:"MM", avatarBg:"rgba(78,204,163,0.5)", type:"Static", topic:"The reframe that ended my people-pleasing", circle:"Circle A", confirmed:12, target:50, time:"8h ago", done:true, url:"https://www.instagram.com/p/Cyx9TqNoLwH/" },
-];
+// HomeScreen's "Live posts" feed is built from real approved queue items
+// (see App's approvedPosts sync effect) — a post has no per-post target in
+// the schema, so every approved post uses this same confirmation goal.
+const CONFIRMATION_TARGET = 50;
 
-const HISTORY = [
-  { id:"1", topic:"Surf trip Portugal", type:"Reel", status:"completed", confs:"50/50", date:"Jun 8" },
-  { id:"2", topic:"Morning routine 2025", type:"Carousel", status:"live", confs:"28/50", date:"Jun 12" },
-  { id:"3", topic:"Gear review: Sony A7IV", type:"Static", status:"pending", confs:"—", date:"Jun 14" },
-];
+// Deterministic placeholder avatar for a handle — real profile photos
+// aren't part of this app's scope (no Instagram media access yet), so
+// every member gets a consistent color + initials derived from their own
+// handle instead of a random/fake one re-rolled on every render.
+const AVATAR_PALETTE = ["#7C6DB5", "rgba(255,107,107,0.6)", "rgba(78,204,163,0.5)", "#4D96FF", "#F4A340", "#E8618C"];
+function avatarColorFor(str) {
+  let hash = 0;
+  for (let i=0; i<(str||"").length; i++) hash = (hash*31 + str.charCodeAt(i)) | 0;
+  return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
+}
+function initialsFromHandle(handle) {
+  const clean = (handle||"").replace(/^@/,"").replace(/[._-]/g," ").trim();
+  const parts = clean.split(/\s+/).filter(Boolean);
+  if (parts.length===0) return "?";
+  if (parts.length===1) return parts[0].slice(0,2).toUpperCase();
+  return (parts[0][0]+parts[1][0]).toUpperCase();
+}
 
 const MAX_SUPPORT_LOG = 50;
 
@@ -512,6 +523,22 @@ const fmtDate = d => {
   const date = d instanceof Date ? d : new Date(d);
   return date.toLocaleDateString([], { month:"short", day:"numeric", year:"numeric" });
 };
+
+// Relative "2h ago" style display for the live feed — submittedAt is a
+// plain millisecond timestamp on queue docs (see SubmitScreen/QueueTab),
+// computed fresh on each render rather than frozen at submission time the
+// way the old item.submitted string is.
+function timeAgo(ms) {
+  if (!ms) return "Just now";
+  const diff = Date.now() - ms;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
 
 // A member's good-faith verification (manually checked by an admin/moderator to confirm
 // they're genuinely supporting posts, not faking confirmations) goes stale after every
@@ -1007,8 +1034,7 @@ function LoginScreen({ onApply }) {
 
 // ─── SCREENS ──────────────────────────────────────────────────────────────────
 
-function HomeScreen({ onNav, points, lastSubmissionByCircle, onSupport, circles, hasAutoReplyAddon }) {
-  const [posts, setPosts] = useState(POSTS);
+function HomeScreen({ onNav, points, lastSubmissionByCircle, onSupport, circles, hasAutoReplyAddon, approvedPosts, currentUser }) {
   const [filter, setFilter] = useState("All");
   const [verify, setVerify] = useState({});
 
@@ -1027,21 +1053,52 @@ function HomeScreen({ onNav, points, lastSubmissionByCircle, onSupport, circles,
   };
   const anyCircleOpen = eligibleCircles.some(c=>circleStatus(c).open);
 
+  // The real live feed: every approved post except the current member's
+  // own (you can't support your own submission), mapped into the same
+  // display shape the old hardcoded mock used. confirmedCount/confirmedBy
+  // come straight from Firestore now — see App's approvedPosts sync effect
+  // and the isValidConfirmation() rule that lets confirm() below write
+  // safely. There's no per-post target in the schema, so every post shares
+  // CONFIRMATION_TARGET as a simplification.
+  const posts = (approvedPosts||[])
+    .filter(p => p.submitterUid !== currentUser?.uid)
+    .map(p => {
+      const confirmedCount = p.confirmedCount || 0;
+      const confirmedBy = p.confirmedBy || [];
+      return {
+        id: p.id, handle: p.handle, type: p.type, topic: p.topic, circle: p.circle, url: p.url,
+        initials: initialsFromHandle(p.handle),
+        avatarBg: avatarColorFor(p.handle || p.id),
+        time: timeAgo(p.submittedAt),
+        confirmed: confirmedCount,
+        target: CONFIRMATION_TARGET,
+        alreadyConfirmedByMe: currentUser?.uid ? confirmedBy.includes(currentUser.uid) : false,
+        done: confirmedCount >= CONFIRMATION_TARGET || (currentUser?.uid ? confirmedBy.includes(currentUser.uid) : false),
+      };
+    });
+
   const confirm = id => {
-    if (!canConfirm(id)) return;
-    setPosts(ps => ps.map(p => p.id===id ? {...p, done:true, confirmed:p.confirmed+1} : p));
+    const post = posts.find(p=>p.id===id);
+    if (!canConfirm(id) || !post || post.done || !currentUser?.uid) return;
+    updateDoc(doc(db, "queue", id), {
+      confirmedCount: increment(1),
+      confirmedBy: arrayUnion(currentUser.uid),
+    }).catch(e => console.warn("Failed to confirm support in Firestore:", e));
     onSupport && onSupport();
   };
   const circleFilters = ["All", ...eligibleCircles.map(c=>c.name)];
   const filtered = filter==="All" ? posts : posts.filter(p=>p.circle===filter);
+  const hour = new Date().getHours();
+  const greeting = hour<12 ? "Good morning" : hour<18 ? "Good afternoon" : "Good evening";
+  const todayLabel = new Date().toLocaleDateString([], { weekday:"long", month:"long", day:"numeric" });
 
   return (
     <div>
-      <div style={{margin:"18px 0 4px", fontSize:22, fontWeight:700, letterSpacing:-0.5}}>Good morning, Alex</div>
-      <div style={{fontSize:13, color:C.textMuted, marginBottom:16}}>Sunday, June 14 · 3 circles active</div>
+      <div style={{margin:"18px 0 4px", fontSize:22, fontWeight:700, letterSpacing:-0.5}}>{greeting}, {(currentUser?.name||"there").split(" ")[0]}</div>
+      <div style={{fontSize:13, color:C.textMuted, marginBottom:16}}>{todayLabel} · {eligibleCircles.length} circle{eligibleCircles.length!==1?"s":""} active</div>
       <span className="chip chip-accent" style={{marginBottom:14}}>
         <Icon name="sparkle" size={13} color={C.accent}/>
-        Plus Plan
+        {currentUser?.plan || "Free"} Plan
       </span>
 
       {/* SUBMISSION ELIGIBILITY */}
@@ -1127,6 +1184,12 @@ function HomeScreen({ onNav, points, lastSubmissionByCircle, onSupport, circles,
           <div key={c} className={`chip ${filter===c?"chip-accent":"chip-ghost"}`} onClick={()=>setFilter(c)}>{c}</div>
         ))}
       </div>
+
+      {filtered.length===0 && (
+        <div style={{textAlign:"center", padding:"28px 0", fontSize:13, color:C.textMuted}}>
+          No live posts right now — check back soon, or be the first to submit one.
+        </div>
+      )}
 
       {filtered.map(post => (
         <div className="post-card" key={post.id}>
@@ -1360,6 +1423,7 @@ function SubmitScreen({ points, lastSubmissionByCircle, onSubmitPost, circles, s
               const typeLabel = types.find(t=>t.key===form.type)?.label || form.type;
               const newItems = selectedCircles.map((c,i) => ({
                 id: `q_${now}_${i}`,
+                status: "pending",
                 handle: currentUser?.handle || "@you",
                 url: form.url,
                 type: typeLabel,
@@ -1369,6 +1433,8 @@ function SubmitScreen({ points, lastSubmissionByCircle, onSubmitPost, circles, s
                 submitted: "Just now",
                 submittedAt: now,
                 submitterUid: currentUser?.uid || null,
+                confirmedCount: 0,
+                confirmedBy: [],
               }));
               setQueue && setQueue(q => [...newItems, ...q]);
               // Best-effort mirror to Firestore so the admin Queue tab (also
@@ -1389,26 +1455,29 @@ function SubmitScreen({ points, lastSubmissionByCircle, onSubmitPost, circles, s
   );
 }
 
-function HistoryScreen() {
+function HistoryScreen({ submissions, currentUser }) {
   const statusMeta = {
-    completed: { color:C.green, bg:"rgba(78,204,163,0.08)", border:"rgba(78,204,163,0.2)", icon:"check", pill:"Completed", pillCls:"chip-green" },
-    live:      { color:C.accent, bg:C.accentGlow, border:C.borderStrong, icon:"zap", pill:"Live", pillCls:"chip-accent" },
-    pending:   { color:C.amber, bg:"rgba(245,200,66,0.08)", border:"rgba(245,200,66,0.2)", icon:"clock", pill:"Pending", pillCls:"chip-amber" },
+    approved: { color:C.green, bg:"rgba(78,204,163,0.08)", border:"rgba(78,204,163,0.2)", icon:"check", pill:"Approved", pillCls:"chip-green" },
+    pending:  { color:C.amber, bg:"rgba(245,200,66,0.08)", border:"rgba(245,200,66,0.2)", icon:"clock", pill:"Pending", pillCls:"chip-amber" },
+    rejected: { color:C.coral, bg:"rgba(255,107,107,0.08)", border:"rgba(255,107,107,0.2)", icon:"x", pill:"Rejected", pillCls:"chip-coral" },
   };
+  const approvedCount = submissions.filter(s=>s.status==="approved").length;
 
   return (
     <div>
       <div className="pg-title">My history</div>
       <div className="pg-sub">All submitted posts and their status</div>
       <div className="stats-grid">
-        <div className="stat-box"><div className="stat-val">12</div><div className="stat-lbl">Total posts</div></div>
-        <div className="stat-box"><div className="stat-val" style={{color:C.green}}>9</div><div className="stat-lbl">Completed</div></div>
-        <div className="stat-box"><div className="stat-val">482</div><div className="stat-lbl">Given</div></div>
+        <div className="stat-box"><div className="stat-val">{submissions.length}</div><div className="stat-lbl">Total posts</div></div>
+        <div className="stat-box"><div className="stat-val" style={{color:C.green}}>{approvedCount}</div><div className="stat-lbl">Approved</div></div>
+        <div className="stat-box"><div className="stat-val">{currentUser?.supportCount ?? 0}</div><div className="stat-lbl">Given</div></div>
       </div>
       <div className="sec-head"><span className="sec-title"><Icon name="list" size={13} color={C.textMuted}/> Submissions</span></div>
       <div className="card">
-        {HISTORY.map(item=>{
-          const m = statusMeta[item.status];
+        {submissions.length===0 ? (
+          <div style={{textAlign:"center", padding:"20px 0", fontSize:13, color:C.textMuted}}>No submissions yet — head to Submit to post your first one.</div>
+        ) : submissions.map(item=>{
+          const m = statusMeta[item.status] || statusMeta.pending;
           return (
             <div className="hist-row" key={item.id}>
               <div className="hist-icon" style={{background:m.bg, border:`1px solid ${m.border}`}}>
@@ -1416,26 +1485,12 @@ function HistoryScreen() {
               </div>
               <div style={{flex:1}}>
                 <div style={{fontSize:13, fontWeight:600, marginBottom:3}}>{item.topic}</div>
-                <div style={{fontSize:12, color:C.textMuted}}>{item.type} · {item.confs} · {item.date}</div>
+                <div style={{fontSize:12, color:C.textMuted}}>{item.type} · {item.circle} · {fmtDate(item.submittedAt)}</div>
               </div>
               <span className={`chip ${m.pillCls}`} style={{fontSize:10}}>{m.pill}</span>
             </div>
           );
         })}
-      </div>
-
-      {/* Confirmation given breakdown */}
-      <div className="sec-head" style={{marginTop:6}}><span className="sec-title"><Icon name="chart" size={13} color={C.textMuted}/> Confirmations given</span></div>
-      <div className="card">
-        {[["Circle A","138","77%"],["Circle B","201","85%"],["Circle C","143","91%"]].map(([c,n,r])=>(
-          <div key={c} style={{padding:"10px 0", borderBottom:`1px solid ${C.border}`}}>
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-              <span style={{fontSize:13,fontWeight:600}}>{c}</span>
-              <span style={{fontSize:13,color:C.textMuted}}>{n} <span style={{fontSize:11}}>({r})</span></span>
-            </div>
-            <div className="prog-track"><div className="prog-fill prog-fill-green" style={{width:r}}/></div>
-          </div>
-        )).concat([<div key="last" style={{paddingTop:10}}><div style={{display:"flex",justifyContent:"space-between"}}><span style={{fontSize:12,color:C.textMuted}}>Circle C</span><span style={{fontSize:12,color:C.textMuted}}>143 (91%)</span></div></div>]).slice(0,3)}
       </div>
     </div>
   );
@@ -2593,7 +2648,7 @@ function QueueTab({ queue, setQueue, circles, logAction, actorName, pushNotifica
       updateDoc(doc(db, "queue", editingId), form).catch(e => console.warn("Failed to update queue item in Firestore:", e));
     } else {
       const newId = `q_${Date.now()}`;
-      const newItem = { id:newId, submitted:"Just now", submittedAt:Date.now(), ...form };
+      const newItem = { id:newId, status:"pending", submitted:"Just now", submittedAt:Date.now(), confirmedCount:0, confirmedBy:[], ...form };
       setQueue(q => [newItem, ...q]);
       setDoc(doc(db, "queue", newId), newItem).catch(e => console.warn("Failed to add queue item to Firestore:", e));
     }
@@ -2603,10 +2658,17 @@ function QueueTab({ queue, setQueue, circles, logAction, actorName, pushNotifica
     setQueue(q => q.filter(i=>i.id!==id));
     deleteDoc(doc(db, "queue", id)).catch(e => console.warn("Failed to delete queue item from Firestore:", e));
   };
+  // Approve/reject mark a status and keep the doc instead of deleting it —
+  // it's what makes a real "My submissions" history possible (see
+  // HistoryScreen): a member's own queue docs persist permanently with
+  // their final status, they just drop out of THIS admin view because
+  // App.jsx's queue sync only fetches status:"pending" docs for the queue
+  // tab. remove() above is the one case that still actually deletes —
+  // for genuinely scrubbing a submission (e.g. spam), not a normal decision.
   const approve = id => {
     const item = queue.find(i=>i.id===id);
     setQueue(q => q.filter(r=>r.id!==id));
-    deleteDoc(doc(db, "queue", id)).catch(e => console.warn("Failed to remove approved item from Firestore:", e));
+    updateDoc(doc(db, "queue", id), { status:"approved", decidedAt:serverTimestamp() }).catch(e => console.warn("Failed to approve queue item in Firestore:", e));
     if (item) {
       logAction && logAction("Approved post", `${item.handle} → ${item.circle}`);
       // Notifies the actual person who submitted this — not the admin
@@ -2618,7 +2680,7 @@ function QueueTab({ queue, setQueue, circles, logAction, actorName, pushNotifica
   const reject = id => {
     const item = queue.find(i=>i.id===id);
     setQueue(q => q.filter(r=>r.id!==id));
-    deleteDoc(doc(db, "queue", id)).catch(e => console.warn("Failed to remove rejected item from Firestore:", e));
+    updateDoc(doc(db, "queue", id), { status:"rejected", decidedAt:serverTimestamp() }).catch(e => console.warn("Failed to reject queue item in Firestore:", e));
     if (item) {
       logAction && logAction("Rejected post", `${item.handle} → ${item.circle}`);
       notifyUser && notifyUser(item.submitterUid, "x", "Post needs changes", `Your submission to ${item.circle} wasn't approved. Check the guidelines and try again.`, "submit");
@@ -4172,11 +4234,44 @@ export default function App() {
     return () => unsub();
   }, [loggedIn]);
 
+  // Only status:"pending" queue docs are fetched here — this is the
+  // admin-facing "needs review" list (QueueTab). Approved/rejected docs
+  // stay in Firestore permanently (see QueueTab.approve()/reject()) but
+  // intentionally drop out of this view once decided; mySubmissions below
+  // is where a member sees their own full history regardless of status.
   useEffect(() => {
     if (!loggedIn) return;
-    const unsub = onSnapshot(collection(db, "queue"), snap => {
+    const unsub = onSnapshot(query(collection(db, "queue"), where("status", "==", "pending")), snap => {
       setQueue(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     }, err => console.warn("queue sync failed:", err));
+    return () => unsub();
+  }, [loggedIn]);
+
+  // A member's own submission history (any status) — what HistoryScreen
+  // reads. Sorted client-side rather than via Firestore orderBy() to avoid
+  // needing a composite index for the submitterUid + submittedAt combo.
+  const [mySubmissions, setMySubmissions] = useState([]);
+  useEffect(() => {
+    if (!loggedIn || !currentUser?.uid) { setMySubmissions([]); return; }
+    const unsub = onSnapshot(query(collection(db, "queue"), where("submitterUid", "==", currentUser.uid)), snap => {
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (b.submittedAt||0) - (a.submittedAt||0));
+      setMySubmissions(items);
+    }, err => console.warn("mySubmissions sync failed:", err));
+    return () => unsub();
+  }, [loggedIn, currentUser?.uid]);
+
+  // The real "Live posts" feed everyone sees on Home and can confirm
+  // support on — every approved queue item, regardless of who submitted
+  // it. This used to be a hardcoded 3-item mock array completely
+  // disconnected from the real approval flow, which was the actual root
+  // cause of approved posts never visibly going anywhere.
+  const [approvedPosts, setApprovedPosts] = useState([]);
+  useEffect(() => {
+    if (!loggedIn) { setApprovedPosts([]); return; }
+    const unsub = onSnapshot(query(collection(db, "queue"), where("status", "==", "approved")), snap => {
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (b.submittedAt||0) - (a.submittedAt||0));
+      setApprovedPosts(items);
+    }, err => console.warn("approvedPosts sync failed:", err));
     return () => unsub();
   }, [loggedIn]);
 
@@ -4539,9 +4634,9 @@ export default function App() {
 
         {/* CONTENT */}
         <div className="content">
-          {screen==="home"        && <HomeScreen    onNav={setScreen} points={currentUser?.points||0} lastSubmissionByCircle={lastSubmissionByCircle} onSupport={addPoints} circles={circles} hasAutoReplyAddon={autoReplyAddon}/>}
+          {screen==="home"        && <HomeScreen    onNav={setScreen} points={currentUser?.points||0} lastSubmissionByCircle={lastSubmissionByCircle} onSupport={addPoints} circles={circles} hasAutoReplyAddon={autoReplyAddon} approvedPosts={approvedPosts} currentUser={currentUser}/>}
           {screen==="submit"      && <SubmitScreen  points={currentUser?.points||0} lastSubmissionByCircle={lastSubmissionByCircle} onSubmitPost={recordSubmission} circles={circles} setQueue={setQueue} currentUser={currentUser}/>}
-          {screen==="history"     && <HistoryScreen />}
+          {screen==="history"     && <HistoryScreen submissions={mySubmissions} currentUser={currentUser}/>}
           {screen==="notifs"      && <NotificationsScreen notifications={notifications} onMarkRead={handleMarkNotificationRead}/>}
           {screen==="pricing"     && <PricingScreen plans={plans} currentUser={currentUser} hasAutoReplyAddon={autoReplyAddon} onToggleAddon={setAutoReplyAddon} onSelectPlan={handleSelectPlan} onNav={setScreen}/>}
           {screen==="editProfile" && <EditProfileScreen currentUser={currentUser} onSave={handleSaveProfile} onBack={()=>setScreen("profile")}/>}
