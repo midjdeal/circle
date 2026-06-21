@@ -4,8 +4,8 @@ import {
   createUserWithEmailAndPassword, signOut,
 } from "firebase/auth";
 import {
-  collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc,
-  serverTimestamp,
+  collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc, getDocs,
+  serverTimestamp, query, where, increment,
 } from "firebase/firestore";
 import { auth, db, googleProvider, savePushSubscription } from "./firebase";
 
@@ -495,44 +495,6 @@ const HISTORY = [
   { id:"3", topic:"Gear review: Sony A7IV", type:"Static", status:"pending", confs:"—", date:"Jun 14" },
 ];
 
-const NOTIFS_DATA = [
-  { id:"1", type:"check", title:"Post approved!", body:"Your reel 'Surf trip Portugal' is now live in Circle C.", time:"2h ago", unread:true },
-  { id:"2", type:"sparkle", title:"50 confirmations reached!", body:"Your post has been completed. Great work!", time:"Jun 8", unread:true },
-  { id:"3", type:"clock", title:"Cooldown ended", body:"You can submit a new post to your circles.", time:"Jun 6", unread:false },
-  { id:"4", type:"announce", title:"Circle C announcement", body:"Posts must be published within 24h of going live.", time:"Jun 3", unread:false },
-];
-
-const REVIEW_QUEUE = [
-  { id:"1", handle:"@sunsetframes", type:"Reel", topic:"Bali sunset session — 4K drone", circle:"Circle C", submitted:"5m ago", submittedAt: Date.now()-5*60*1000, plan:"Pro", url:"https://www.instagram.com/reel/Cz9k1RgIaXp/" },
-  { id:"2", handle:"@coachmark_fit", type:"Carousel", topic:"Pull-up progression from 0 to 20 reps", circle:"Circle B", submitted:"20m ago", submittedAt: Date.now()-20*60*1000, plan:"Plus", url:"https://www.instagram.com/p/Cz7m4ToL9wF/" },
-  { id:"3", handle:"@travelwithlee", type:"Static", topic:"Underrated spots in Porto", circle:"Circle A", submitted:"35m ago", submittedAt: Date.now()-35*60*1000, plan:"Free", url:"https://www.instagram.com/p/Cz5h2VqIeRt/" },
-];
-
-const MEMBERS_DATA = [
-  { id:"m1", handle:"@luxuria.photo", name:"Lucía Ponti",   username:"luxuria.photo", email:"lucia.ponti@example.com",   plan:"Pro",  circle:"C", status:"active",  joined:"2026-02-14", points:134, supportCount:15000, verified:true,  verifiedAtSupportCount:14900, verifiedAt:new Date(Date.now()-10*24*60*60*1000),
-    supportLog:[
-      { id:"m1l1", postUrl:"https://www.instagram.com/p/Cz1k2RvI9wQ/", circle:"Circle C", author:"@fithero_kai",   time:new Date(Date.now()-2*3600000) },
-      { id:"m1l2", postUrl:"https://www.instagram.com/p/Cz0a8NpL3sX/", circle:"Circle C", author:"@coachmark_fit", time:new Date(Date.now()-26*3600000) },
-      { id:"m1l3", postUrl:"https://www.instagram.com/p/CyZp1QwM7Te/", circle:"Circle B", author:"@mindful.maya",  time:new Date(Date.now()-50*3600000) },
-    ] },
-  { id:"m2", handle:"@fithero_kai",   name:"Kai Fisher",    username:"fithero_kai",   email:"kai.fisher@example.com",    plan:"Plus", circle:"B", status:"active",  joined:"2026-03-02", points:62,  supportCount:340,   verified:true,  verifiedAtSupportCount:150,   verifiedAt:new Date(Date.now()-25*24*60*60*1000),
-    supportLog:[
-      { id:"m2l1", postUrl:"https://www.instagram.com/p/CzAb3RtY8oP/", circle:"Circle B", author:"@coachmark_fit", time:new Date(Date.now()-5*3600000) },
-      { id:"m2l2", postUrl:"https://www.instagram.com/p/Cz9q7XmK2lR/", circle:"Circle B", author:"@luxuria.photo", time:new Date(Date.now()-30*3600000) },
-    ] },
-  { id:"m3", handle:"@mindful.maya",  name:"Maya Restrepo", username:"mindful.maya",  email:"maya.restrepo@example.com", plan:"Free", circle:"A", status:"active",  joined:"2026-01-22", points:29,  supportCount:95,    verified:false, verifiedAtSupportCount:0,     verifiedAt:null,
-    supportLog:[
-      { id:"m3l1", postUrl:"https://www.instagram.com/p/CyV4mQpL1xZ/", circle:"Circle A", author:"@luxuria.photo", time:new Date(Date.now()-8*3600000) },
-    ] },
-  { id:"m4", handle:"@sunsetframes",  name:"Sunset Frames Studio", username:"sunsetframes", email:"hello@sunsetframes.co", plan:"Pro",  circle:"C", status:"pending", joined:"2026-05-30", points:0,   supportCount:0,     verified:false, verifiedAtSupportCount:0,     verifiedAt:null,
-    supportLog:[] },
-  { id:"m5", handle:"@coachmark_fit", name:"Mark Coleman",  username:"coachmark_fit", email:"mark.coleman@example.com",  plan:"Plus", circle:"B", status:"active",  joined:"2026-04-11", points:51,  supportCount:6200,  verified:true,  verifiedAtSupportCount:6000,  verifiedAt:new Date(Date.now()-31*24*60*60*1000),
-    supportLog:[
-      { id:"m5l1", postUrl:"https://www.instagram.com/p/CzB2kRpW4nQ/", circle:"Circle B", author:"@fithero_kai",   time:new Date(Date.now()-3*3600000) },
-      { id:"m5l2", postUrl:"https://www.instagram.com/p/Cz7m1TnX9sV/", circle:"Circle C", author:"@luxuria.photo", time:new Date(Date.now()-22*3600000) },
-      { id:"m5l3", postUrl:"https://www.instagram.com/p/Cz6h5QzR3kL/", circle:"Circle B", author:"@mindful.maya",  time:new Date(Date.now()-46*3600000) },
-    ] },
-];
 const MAX_SUPPORT_LOG = 50;
 
 // Ranking tiers based on lifetime support actions given.
@@ -556,39 +518,6 @@ const fmtDate = d => {
 // 200 additional support actions and needs to be rechecked.
 const VERIFY_RECHECK_INTERVAL = 200;
 const VERIFY_WARN_THRESHOLD = 150;
-
-const CIRCLES_DATA = [
-  { key:"A", name:"Circle A", req:"< 1k followers",   members:142, active:true,  activity:34, platform:"instagram", group:"Holistic" },
-  { key:"B", name:"Circle B", req:"1k–5k followers",  members:287, active:true,  activity:57, platform:"instagram", group:"Fitness Influencer" },
-  { key:"C", name:"Circle C", req:"5k–10k followers", members:164, active:true,  activity:78, platform:"instagram", group:"Content Creator" },
-  { key:"D", name:"Circle D", req:"> 10k followers",  members:93,  active:false, activity:42, platform:"instagram", group:"Models" },
-  { key:"E", name:"Circle E", req:"Verified + 10k+",  members:28,  active:false, activity:91, platform:"instagram", group:"A.I" },
-];
-
-const REFERRALS_DATA = [
-  { id:"f1", name:"Jordan Blake", email:"jordan.blake@example.com", status:"subscribed" },
-  { id:"f2", name:"Sam Kim",      email:"sam.kim@example.com",      status:"invited"    },
-];
-
-const AFFILIATES_DATA = [
-  { id:"a1", name:"@newcreator.studio", plan:"Plus", monthlyPrice:4.99, status:"active",  since:"2026-04-02" },
-  { id:"a2", name:"@growthwithmia",     plan:"Pro",  monthlyPrice:9.99, status:"active",  since:"2026-05-10" },
-  { id:"a3", name:"@oldaffiliate",      plan:"Plus", monthlyPrice:4.99, status:"churned", since:"2026-02-01" },
-];
-
-const CASHOUT_REQUESTS_DATA = [];
-
-const TEAM_DATA = [
-  { id:"t1", name:"Alex Rivera",  email:"alex.rivera@gmail.com",    role:"Super Admin" },
-  { id:"t2", name:"Priya Anand",  email:"priya.anand@example.com",  role:"Admin"       },
-  { id:"t3", name:"Leo Fontaine", email:"leo.fontaine@example.com", role:"Moderator"   },
-  { id:"t4", name:"Maddie Cho",   email:"maddie.cho@example.com",   role:"Support"     },
-];
-
-const ACTIVITY_LOG_DATA = [
-  { id:"log_seed1", actor:"Priya Anand",  action:"Approved post",      detail:"@travelwithlee → Circle A",   time:new Date(Date.now()-3*60*60*1000)  },
-  { id:"log_seed2", actor:"Leo Fontaine", action:"Dismissed report",   detail:"@darkfollower99 · Circle B",  time:new Date(Date.now()-26*60*60*1000) },
-];
 
 const PLANS_DATA = [
   { key:"free", name:"Free", price:"0", sub:"/month", featured:false, badge:"",
@@ -680,41 +609,6 @@ const SAFETY_DEFAULTS = {
   manualReviewMode: false,
 };
 
-const AUTOMATIONS_DATA = [
-  {
-    id:"auto1", name:"Free Guide Comment-to-DM", status:"active",
-    trigger:{ type:"comment_keyword", keywords:["guide","pdf","free"], matchMode:"contains", postCaption:"Comment GUIDE and I'll send you the free PDF in DM." },
-    conditions:["user_not_already_replied"],
-    steps:[
-      { type:"private_reply",       message:"Hey {{username}} 👋 thanks for commenting! Before I send the guide, follow our page and like the post, then reply DONE." },
-      { type:"wait_for_dm_keyword", message:"done, yes, ok" },
-      { type:"send_dm",             message:"Perfect 🙌 Here is your free guide: {{link}}" },
-      { type:"tag_user",            message:"lead_free_guide" },
-    ],
-    stats:{ triggered:212, completed:168, repliesSent:212 },
-  },
-  {
-    id:"auto2", name:"Pricing Auto Reply", status:"paused",
-    trigger:{ type:"dm_keyword", keywords:["price","pricing","tarif","cost"], matchMode:"contains" },
-    conditions:[],
-    steps:[
-      { type:"send_dm",             message:"Hey 👋 here are our current packages:\nStarter: 49€\nPro: 99€\nVIP: 199€" },
-      { type:"wait_for_dm_keyword", message:"yes, book, link" },
-      { type:"send_dm",             message:"Great, here is the link: {{booking_url}}" },
-    ],
-    stats:{ triggered:84, completed:51, repliesSent:84 },
-  },
-  {
-    id:"auto3", name:"Thank Every Story Reply", status:"active",
-    trigger:{ type:"story_mention", keywords:[], matchMode:"any", storyNote:"Poll sticker asking followers about their biggest fitness struggle" },
-    conditions:["user_not_already_replied"],
-    steps:[
-      { type:"send_dm", message:"Hey {{username}} thanks for replying to my story! 🙌 Means a lot." },
-    ],
-    stats:{ triggered:96, completed:96, repliesSent:96 },
-  },
-];
-
 // ─── SUPPORT POINTS & SUBMISSION RULES ────────────────────────────────────────
 // A member earns +1 point per verified support confirmation, and loses -1 point
 // if a confirmation is later reported and confirmed fake by an admin.
@@ -764,6 +658,32 @@ const formatDuration = ms => {
 
 // ─── TEAM ROLES & NOTIFICATION PREFERENCES ──────────────────────────────────
 const TEAM_ROLES = ["Super Admin","Admin","Moderator","Support"];
+// Maps the canonical role values stored in Firestore (users/{uid}.role —
+// also what firestore.rules' isAdmin()/isSuperAdmin() check) to the display
+// strings the UI already used (TEAM_ROLES above). Anyone not in this map —
+// including a freshly-provisioned member — is treated as "Member" and gets
+// no admin access; there's deliberately no fallback to an elevated role.
+const ROLE_LABELS = { member:"Member", support:"Support", moderator:"Moderator", admin:"Admin", superadmin:"Super Admin" };
+const roleLabel = role => ROLE_LABELS[role] || "Member";
+const STAFF_ROLES = ["support","moderator","admin","superadmin"];
+const roleSlug = displayRole => Object.keys(ROLE_LABELS).find(k => ROLE_LABELS[k] === displayRole) || "member";
+
+// If someone added/edited/removed in the Team tab already has a real
+// users/{uid} doc (i.e. they've signed up), this applies the role change to
+// them immediately rather than only the next time they sign in. Looked up
+// by email since the Team tab manages entries before a uid necessarily
+// exists (see the matching email-lookup in App's onAuthStateChanged
+// profile-creation logic, which covers the reverse case: a brand new
+// sign-in from an email already sitting in the team list).
+async function applyTeamRoleToExistingUser(email, displayRole) {
+  if (!email) return;
+  try {
+    const snap = await getDocs(query(collection(db, "users"), where("email", "==", email)));
+    if (!snap.empty) await updateDoc(snap.docs[0].ref, { role: roleSlug(displayRole) });
+  } catch (e) {
+    console.warn("Failed to sync team role to existing user:", e);
+  }
+}
 const NOTIF_PREF_DEFAULTS = {
   newPostInCircle: true,
   submissionApproved: true,
@@ -1580,8 +1500,7 @@ function PushToast({ toast, onDismiss, onTap }) {
   );
 }
 
-function NotificationsScreen({ notifications, setNotifications }) {
-  const markRead = id => setNotifications(ns=>ns.map(n=>n.id===id?{...n,unread:false}:n));
+function NotificationsScreen({ notifications, onMarkRead }) {
   const unread = notifications.filter(n=>n.unread).length;
 
   const notifMeta = {
@@ -1603,7 +1522,7 @@ function NotificationsScreen({ notifications, setNotifications }) {
         {notifications.map(n=>{
           const m = notifMeta[n.type]||{bg:C.bgCardAlt,color:C.textMuted};
           return (
-            <div className={`notif-row`} key={n.id} onClick={()=>markRead(n.id)}>
+            <div className={`notif-row`} key={n.id} onClick={()=>onMarkRead(n.id)}>
               <div className="notif-icon" style={{background:m.bg}}>
                 <Icon name={n.type} size={17} color={m.color}/>
               </div>
@@ -2113,9 +2032,10 @@ function EditProfileScreen({ currentUser, onSave, onBack }) {
     username: (currentUser?.handle || "").replace(/^@/,""),
     email: currentUser?.email || "",
     bio: currentUser?.bio || "",
+    contentType: currentUser?.contentType || "",
   });
   const save = () => {
-    onSave({ ...currentUser, name:form.name, handle:`@${form.username.replace(/^@/,"")}`, email:form.email, bio:form.bio });
+    onSave({ ...currentUser, name:form.name, handle:`@${form.username.replace(/^@/,"")}`, email:form.email, bio:form.bio, contentType:form.contentType });
     onBack();
   };
   return (
@@ -2137,6 +2057,14 @@ function EditProfileScreen({ currentUser, onSave, onBack }) {
       <div className="field">
         <label className="field-lbl">Bio / niche</label>
         <input className="field-inp" placeholder="e.g. Travel & Lifestyle" value={form.bio} onChange={e=>setForm(f=>({...f,bio:e.target.value}))}/>
+      </div>
+      <div className="field">
+        <label className="field-lbl">Type of content</label>
+        <div style={{display:"flex", gap:6, flexWrap:"wrap"}}>
+          {CIRCLE_GROUPS.map(g=>(
+            <div key={g} className={`chip ${form.contentType===g?"chip-accent":"chip-ghost"}`} style={{fontSize:10, padding:"4px 10px"}} onClick={()=>setForm(f=>({...f,contentType:g}))}>{g}</div>
+          ))}
+        </div>
       </div>
       <div style={{display:"flex", gap:8}}>
         <button className="btn btn-ghost" style={{flex:1}} onClick={onBack}>Cancel</button>
@@ -2443,7 +2371,10 @@ function ProfileScreen({ onNav, points, circles, currentUser, referrals, setRefe
   const ibanValid = isValidIban(iban);
   const requestCashout = () => {
     if (!ibanValid || walletBalance<=0) return;
-    setCashoutRequests(rs => [{ id:`co_${Date.now()}`, name:currentUser?.name||"Alex Rivera", amount:walletBalance, iban, status:"pending", date:new Date().toISOString().slice(0,10) }, ...rs]);
+    const newId = `co_${Date.now()}`;
+    const newRequest = { id:newId, uid:currentUser?.uid||null, name:currentUser?.name||"Member", amount:walletBalance, iban, status:"pending", date:new Date().toISOString().slice(0,10) };
+    setCashoutRequests(rs => [newRequest, ...rs]);
+    setDoc(doc(db, "cashoutRequests", newId), newRequest).catch(e => console.warn("Failed to save cashout request to Firestore:", e));
     setWalletBalance(0);
   };
 
@@ -2646,7 +2577,7 @@ function ReviewTimer({ submittedAt }) {
   );
 }
 
-function QueueTab({ queue, setQueue, circles, logAction, actorName, pushNotification }) {
+function QueueTab({ queue, setQueue, circles, logAction, actorName, pushNotification, notifyUser }) {
   const emptyForm = () => ({ handle:"", url:"", type:"Reel", topic:"", circle:circles[0]?.name || "Circle A", plan:"Free" });
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -2691,7 +2622,10 @@ function QueueTab({ queue, setQueue, circles, logAction, actorName, pushNotifica
     deleteDoc(doc(db, "queue", id)).catch(e => console.warn("Failed to remove approved item from Firestore:", e));
     if (item) {
       logAction && logAction("Approved post", `${item.handle} → ${item.circle}`);
-      pushNotification && pushNotification("check", "Post approved!", `Your ${item.type?.toLowerCase()||"post"} is now live in ${item.circle}.`, "submissionApproved", "home");
+      // Notifies the actual person who submitted this — not the admin
+      // approving it. notifyUser writes straight to Firestore so it's there
+      // whenever that member is next signed in, even on a different device.
+      notifyUser && notifyUser(item.submitterUid, "check", "Post approved!", `Your ${item.type?.toLowerCase()||"post"} is now live in ${item.circle}.`, "home");
     }
   };
   const reject = id => {
@@ -2700,7 +2634,7 @@ function QueueTab({ queue, setQueue, circles, logAction, actorName, pushNotifica
     deleteDoc(doc(db, "queue", id)).catch(e => console.warn("Failed to remove rejected item from Firestore:", e));
     if (item) {
       logAction && logAction("Rejected post", `${item.handle} → ${item.circle}`);
-      pushNotification && pushNotification("x", "Post needs changes", `Your submission to ${item.circle} wasn't approved. Check the guidelines and try again.`, "submissionRejected", "submit");
+      notifyUser && notifyUser(item.submitterUid, "x", "Post needs changes", `Your submission to ${item.circle} wasn't approved. Check the guidelines and try again.`, "submit");
     }
   };
 
@@ -2861,7 +2795,7 @@ function QueueTab({ queue, setQueue, circles, logAction, actorName, pushNotifica
   );
 }
 
-function MembersTab({ members, setMembers, circles, logAction, actorName }) {
+function MembersTab({ members, setMembers, circles, logAction, actorName, notifyUser }) {
   const emptyForm = () => ({ name:"", username:"", email:"", plan:"Free", circle: circles[0]?.key || "A", status:"active", points:0 });
   const [search, setSearch] = useState("");
   const [planFilter, setPlanFilter] = useState("All");
@@ -2911,7 +2845,10 @@ function MembersTab({ members, setMembers, circles, logAction, actorName }) {
     const m = members.find(x=>x.id===id);
     setMembers(ms => ms.map(x => x.id===id ? {...x, status:"active", approvedBy:actorName} : x));
     updateDoc(doc(db, "users", id), { status:"active", approvedBy:actorName }).catch(e => console.warn("Failed to approve member in Firestore:", e));
-    if (m) logAction && logAction("Approved member", m.name || m.handle);
+    if (m) {
+      logAction && logAction("Approved member", m.name || m.handle);
+      notifyUser && notifyUser(id, "check", "You're approved!", "Your application to Creator Circle has been approved — welcome aboard.", "home");
+    }
   };
   const verifyMember = id => {
     const m = members.find(x=>x.id===id);
@@ -3357,15 +3294,22 @@ function PlansTab({ plans, setPlans }) {
     if (!form.name || !form.price) return;
     const cleanFeats = form.feats.filter(ft=>ft.text.trim()!=="");
     if (editingKey) {
-      setPlans(ps => ps.map(p => p.key===editingKey ? {...p, ...form, feats:cleanFeats} : p));
+      const updated = {...form, feats:cleanFeats};
+      setPlans(ps => ps.map(p => p.key===editingKey ? {...p, ...updated} : p));
+      updateDoc(doc(db, "plans", editingKey), updated).catch(e => console.warn("Failed to update plan in Firestore:", e));
     } else {
       const key = form.key || form.name.toLowerCase().replace(/[^a-z0-9]+/g,"_");
       if (plans.some(p=>p.key===key)) return;
-      setPlans(ps => [...ps, {...form, key, feats:cleanFeats}]);
+      const newPlan = {...form, key, feats:cleanFeats};
+      setPlans(ps => [...ps, newPlan]);
+      setDoc(doc(db, "plans", key), newPlan).catch(e => console.warn("Failed to add plan to Firestore:", e));
     }
     cancel();
   };
-  const remove = key => setPlans(ps => ps.filter(p=>p.key!==key));
+  const remove = key => {
+    setPlans(ps => ps.filter(p=>p.key!==key));
+    deleteDoc(doc(db, "plans", key)).catch(e => console.warn("Failed to delete plan from Firestore:", e));
+  };
 
   return (
     <div>
@@ -3445,22 +3389,29 @@ function PlansTab({ plans, setPlans }) {
   );
 }
 
-function PayoutsTab({ cashoutRequests, setCashoutRequests, addPoints, logAction, pushNotification }) {
+function PayoutsTab({ cashoutRequests, setCashoutRequests, logAction, notifyUser }) {
   const markPaid = id => {
     const r = cashoutRequests.find(x=>x.id===id);
     setCashoutRequests(rs => rs.map(x => x.id===id ? {...x, status:"paid"} : x));
+    updateDoc(doc(db, "cashoutRequests", id), { status:"paid" }).catch(e => console.warn("Failed to mark payout paid in Firestore:", e));
     if (r) {
       logAction && logAction("Transferred payout", `€${r.amount.toFixed(2)} to ${r.name}`);
-      pushNotification && pushNotification("send", "Payout sent!", `€${r.amount.toFixed(2)} has been transferred to your account.`, "payoutUpdates", "profile");
+      notifyUser && notifyUser(r.uid, "send", "Payout sent!", `€${r.amount.toFixed(2)} has been transferred to your account.`, "profile");
     }
   };
   const convertToPoints = id => {
     const r = cashoutRequests.find(x=>x.id===id);
-    if (r) addPoints(Math.round(r.amount*POINTS_PER_EURO));
+    const pts = r ? Math.round(r.amount*POINTS_PER_EURO) : 0;
     setCashoutRequests(rs => rs.map(x => x.id===id ? {...x, status:"converted"} : x));
+    updateDoc(doc(db, "cashoutRequests", id), { status:"converted" }).catch(e => console.warn("Failed to mark payout converted in Firestore:", e));
     if (r) {
-      logAction && logAction("Converted payout to points", `€${r.amount.toFixed(2)} → ${Math.round(r.amount*POINTS_PER_EURO)} pts for ${r.name}`);
-      pushNotification && pushNotification("send", "Payout converted", `€${r.amount.toFixed(2)} was converted to ${Math.round(r.amount*POINTS_PER_EURO)} points.`, "payoutUpdates", "profile");
+      // This increments the REQUESTER's points, not the admin's own — an
+      // admin (unlike a member on their own doc) is allowed to write any
+      // field on someone else's profile per firestore.rules, which is what
+      // makes this safe and correct here.
+      if (r.uid) updateDoc(doc(db, "users", r.uid), { points: increment(pts) }).catch(e => console.warn("Failed to award converted points:", e));
+      logAction && logAction("Converted payout to points", `€${r.amount.toFixed(2)} → ${pts} pts for ${r.name}`);
+      notifyUser && notifyUser(r.uid, "send", "Payout converted", `€${r.amount.toFixed(2)} was converted to ${pts} points.`, "profile");
     }
   };
   const pending = cashoutRequests.filter(r=>r.status==="pending");
@@ -3634,17 +3585,34 @@ function TeamTab({ team, setTeam, logAction }) {
     if (editingId) {
       const prev = team.find(t=>t.id===editingId);
       setTeam(ts => ts.map(t => t.id===editingId ? {...t, ...form} : t));
-      if (prev && prev.role!==form.role) logAction && logAction("Changed role", `${form.name}: ${prev.role} → ${form.role}`);
+      updateDoc(doc(db, "team", editingId), form).catch(e => console.warn("Failed to update team entry in Firestore:", e));
+      if (prev && prev.role!==form.role) {
+        logAction && logAction("Changed role", `${form.name}: ${prev.role} → ${form.role}`);
+        applyTeamRoleToExistingUser(form.email, form.role);
+      }
     } else {
-      setTeam(ts => [...ts, { id:`t_${Date.now()}`, ...form }]);
+      const newId = `t_${Date.now()}`;
+      setTeam(ts => [...ts, { id:newId, ...form }]);
+      setDoc(doc(db, "team", newId), form).catch(e => console.warn("Failed to add team entry to Firestore:", e));
       logAction && logAction("Added team member", `${form.name} (${form.role})`);
+      // Covers someone who already has an account before being added to the
+      // team list — their role applies immediately rather than only on
+      // their next sign-in.
+      applyTeamRoleToExistingUser(form.email, form.role);
     }
     cancel();
   };
   const remove = id => {
     const t = team.find(x=>x.id===id);
     setTeam(ts => ts.filter(x=>x.id!==id));
-    if (t) logAction && logAction("Removed team member", t.name);
+    deleteDoc(doc(db, "team", id)).catch(e => console.warn("Failed to remove team entry from Firestore:", e));
+    if (t) {
+      logAction && logAction("Removed team member", t.name);
+      // Revokes access immediately if they already have an account — being
+      // removed from the team list should actually remove their admin
+      // access, not just the directory entry.
+      applyTeamRoleToExistingUser(t.email, "Member");
+    }
   };
 
   const roleChipClass = role => role==="Super Admin" ? "chip-accent" : role==="Admin" ? "chip-green" : role==="Moderator" ? "chip-amber" : "chip-ghost";
@@ -3735,7 +3703,7 @@ function LogTab({ activityLog }) {
   );
 }
 
-function AdminScreen({ queue, setQueue, members, setMembers, circles, setCircles, plans, setPlans, cashoutRequests, setCashoutRequests, addPoints, team, setTeam, activityLog, logAction, myRole, actorName, supportTickets, setSupportTickets, pushNotification }) {
+function AdminScreen({ queue, setQueue, members, setMembers, circles, setCircles, plans, setPlans, cashoutRequests, setCashoutRequests, team, setTeam, activityLog, logAction, myRole, actorName, supportTickets, setSupportTickets, pushNotification, notifyUser }) {
   const [tab, setTab] = useState("queue");
   const [menuOpen, setMenuOpen] = useState(false);
   const [reports, setReports] = useState([
@@ -3826,12 +3794,12 @@ function AdminScreen({ queue, setQueue, members, setMembers, circles, setCircles
         </div>
       </div>
 
-      {tab==="queue"   && <QueueTab   queue={queue} setQueue={setQueue} circles={circles} logAction={logAction} actorName={actorName} pushNotification={pushNotification}/>}
-      {tab==="members" && <MembersTab members={members} setMembers={setMembers} circles={circles} logAction={logAction} actorName={actorName}/>}
+      {tab==="queue"   && <QueueTab   queue={queue} setQueue={setQueue} circles={circles} logAction={logAction} actorName={actorName} pushNotification={pushNotification} notifyUser={notifyUser}/>}
+      {tab==="members" && <MembersTab members={members} setMembers={setMembers} circles={circles} logAction={logAction} actorName={actorName} notifyUser={notifyUser}/>}
       {tab==="circles" && <CirclesTab circles={circles} setCircles={setCircles} logAction={logAction}/>}
       {tab==="plans"   && <PlansTab   plans={plans} setPlans={setPlans}/>}
-      {tab==="payouts" && <PayoutsTab cashoutRequests={cashoutRequests} setCashoutRequests={setCashoutRequests} addPoints={addPoints} logAction={logAction} pushNotification={pushNotification}/>}
-      {tab==="support" && <AdminSupportTab tickets={supportTickets} setTickets={setSupportTickets} logAction={logAction} actorName={actorName} pushNotification={pushNotification}/>}
+      {tab==="payouts" && <PayoutsTab cashoutRequests={cashoutRequests} setCashoutRequests={setCashoutRequests} logAction={logAction} notifyUser={notifyUser}/>}
+      {tab==="support" && <AdminSupportTab tickets={supportTickets} setTickets={setSupportTickets} logAction={logAction} actorName={actorName} pushNotification={pushNotification} notifyUser={notifyUser}/>}
       {tab==="team"    && isSuperAdmin && <TeamTab team={team} setTeam={setTeam} logAction={logAction}/>}
       {tab==="log"     && isSuperAdmin && <LogTab activityLog={activityLog}/>}
 
@@ -3975,32 +3943,77 @@ export default function App() {
     }
   }, []);
 
-  // Support points: +1 per verified confirmation, -1 if a confirmation is reported as fake.
-  // Starts a couple of points under the 50-point submission threshold, so confirming
-  // the two live posts below unlocks submitting.
-  const [points, setPoints] = useState(48);
+  // Support points now live on currentUser.points (Firestore-synced — see
+  // addPoints() further down for why self-service point changes are
+  // local-only/optimistic rather than persisted) instead of a separate
+  // local useState here.
 
   // Weekly submission cooldown is tracked per circle (key -> last submission timestamp),
   // not globally — Circle C is seeded as recently posted to so it's still on cooldown
   // while A and B are open, to demonstrate the per-circle rule live.
   const [lastSubmissionByCircle, setLastSubmissionByCircle] = useState({ C: Date.now() - 2*24*60*60*1000 });
 
-  const [queue, setQueue] = useState(REVIEW_QUEUE);
-  const [members, setMembers] = useState(MEMBERS_DATA);
-  const [circles, setCircles] = useState(CIRCLES_DATA);
+  const [queue, setQueue] = useState([]);
+  const [members, setMembers] = useState([]);
+  const [circles, setCircles] = useState([]);
   const [plans, setPlans] = useState(PLANS_DATA);
 
-  const [referrals, setReferrals] = useState(REFERRALS_DATA);
-  const [affiliates, setAffiliates] = useState(AFFILIATES_DATA);
+  // referrals, affiliates, iban, notifPrefs, automations, safetySettings,
+  // igConnection, and hasAutoReplyAddon all live as fields directly on the
+  // signed-in user's own Firestore doc (users/{uid}) rather than separate
+  // top-level state — see selfEditableFields() in firestore.rules, which is
+  // the actual allow-list enforcing that a user can only ever edit these on
+  // THEIR OWN doc. updateMyProfileField() below is the single write path
+  // for all of them.
+  //
+  // walletBalance is the one deliberate exception: it stays local-only,
+  // NOT persisted to Firestore. There's no real payment/commission
+  // calculation engine behind it, so the existing "Simulate next month's
+  // payout" demo button just increments a number — persisting that via a
+  // direct client write would mean anyone could grant themselves money by
+  // calling the right updateDoc() from the browser console. A real wallet
+  // balance needs to be computed server-side (Cloud Function reconciling
+  // verified support actions / actual affiliate conversions), which is out
+  // of scope here.
   const [walletBalance, setWalletBalance] = useState(86.40);
-  const [iban, setIban] = useState("");
-  const [cashoutRequests, setCashoutRequests] = useState(CASHOUT_REQUESTS_DATA);
+  const referrals = currentUser?.referrals || [];
+  const affiliates = currentUser?.affiliates || [];
+  const iban = currentUser?.iban || "";
+  const notifPrefs = currentUser?.notifPrefs || NOTIF_PREF_DEFAULTS;
+  const automations = currentUser?.automations || [];
+  const safetySettings = currentUser?.safetySettings || SAFETY_DEFAULTS;
+  const igConnection = currentUser?.igConnection || null;
+  const autoReplyAddon = currentUser?.hasAutoReplyAddon || false;
 
-  const [notifPrefs, setNotifPrefs] = useState(NOTIF_PREF_DEFAULTS);
-  const [team, setTeam] = useState(TEAM_DATA);
-  const [activityLog, setActivityLog] = useState(ACTIVITY_LOG_DATA);
+  // Updates one field on the signed-in user's own profile doc: optimistic
+  // local update first, then best-effort Firestore write. Accepts either a
+  // plain value or a React-style updater function so call sites that do
+  // setReferrals(rs => [...rs, x]) keep working unchanged.
+  const updateMyProfileField = (field, currentValue) => (updaterOrValue) => {
+    const nextValue = typeof updaterOrValue === "function" ? updaterOrValue(currentValue) : updaterOrValue;
+    setCurrentUser(u => u ? {...u, [field]: nextValue} : u);
+    if (currentUser?.uid) {
+      updateDoc(doc(db, "users", currentUser.uid), { [field]: nextValue })
+        .catch(e => console.warn(`Failed to save ${field} to Firestore:`, e));
+    }
+  };
+  const setReferrals = updateMyProfileField("referrals", referrals);
+  const setAffiliates = updateMyProfileField("affiliates", affiliates);
+  const setIban = updateMyProfileField("iban", iban);
+  const setNotifPrefs = updateMyProfileField("notifPrefs", notifPrefs);
+  const setAutomations = updateMyProfileField("automations", automations);
+  const setSafetySettings = updateMyProfileField("safetySettings", safetySettings);
+  const setIgConnection = updateMyProfileField("igConnection", igConnection);
+  const setAutoReplyAddon = updateMyProfileField("hasAutoReplyAddon", autoReplyAddon);
 
-  const [notifications, setNotifications] = useState(NOTIFS_DATA);
+  // cashoutRequests, team, and activityLog are separate top-level Firestore
+  // collections (not per-user fields) — see the sync effects further down
+  // for how each is read, and firestore.rules for who can read/write each.
+  const [cashoutRequests, setCashoutRequests] = useState([]);
+  const [team, setTeam] = useState([]);
+  const [activityLog, setActivityLog] = useState([]);
+
+  const [notifications, setNotifications] = useState([]);
   const [activeToast, setActiveToast] = useState(null);
   const [pushPermission, setPushPermission] = useState(() => {
     try { return (typeof Notification !== "undefined") ? Notification.permission : "unsupported"; }
@@ -4082,6 +4095,18 @@ export default function App() {
           // rather than leaving the user stuck.
           const isGoogle = fbUser.providerData[0]?.providerId === "google.com";
           const emailPrefix = (fbUser.email || "member").split("@")[0];
+          // Was this email pre-assigned a role via the Team tab before they
+          // ever signed up? firestore.rules lets a user read only the
+          // single team doc matching their own verified auth-token email,
+          // so this query can't be used to browse the rest of the staff
+          // directory.
+          let grantedRole = "member";
+          try {
+            const teamSnap = await getDocs(query(collection(db, "team"), where("email", "==", fbUser.email)));
+            if (!teamSnap.empty) grantedRole = roleSlug(teamSnap.docs[0].data().role);
+          } catch (teamErr) {
+            console.warn("Team role lookup failed (defaulting to member):", teamErr);
+          }
           const defaultProfile = {
             name: fbUser.displayName || emailPrefix,
             email: fbUser.email || "",
@@ -4091,7 +4116,7 @@ export default function App() {
             plan: "Free",
             provider: isGoogle ? "google" : "email",
             status: "active",
-            role: "member",
+            role: grantedRole,
             circle: "A",
             points: 0,
             supportCount: 0,
@@ -4134,17 +4159,13 @@ export default function App() {
   // Circles, members, and the review queue are kept live-synced from
   // Firestore once signed in (Firestore security rules require
   // request.auth != null, so these wait for loggedIn rather than running on
-  // mount). Each only overwrites the local mock fallback if Firestore
-  // actually returned documents — that way the app still demos sensibly
-  // before the sandbox seed script has been run, instead of going blank.
-  //
-  // NOTE: not every collection is wired up this way yet — referrals,
-  // affiliates, cashout requests, team, activity log, automations, and
-  // notification preferences are still local-only state for this pass.
+  // mount). No local mock fallback — an empty collection means the app
+  // shows an empty state, which is the honest reflection of what's
+  // actually in Firestore. Run seed-sandbox-data.js to populate test data.
   useEffect(() => {
     if (!loggedIn) return;
     const unsub = onSnapshot(collection(db, "circles"), snap => {
-      if (!snap.empty) setCircles(snap.docs.map(d => ({ key: d.id, ...d.data() })));
+      setCircles(snap.docs.map(d => ({ key: d.id, ...d.data() })));
     }, err => console.warn("circles sync failed:", err));
     return () => unsub();
   }, [loggedIn]);
@@ -4152,7 +4173,7 @@ export default function App() {
   useEffect(() => {
     if (!loggedIn) return;
     const unsub = onSnapshot(collection(db, "users"), snap => {
-      if (!snap.empty) setMembers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setMembers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     }, err => console.warn("members sync failed:", err));
     return () => unsub();
   }, [loggedIn]);
@@ -4160,10 +4181,41 @@ export default function App() {
   useEffect(() => {
     if (!loggedIn) return;
     const unsub = onSnapshot(collection(db, "queue"), snap => {
-      if (!snap.empty) setQueue(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setQueue(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     }, err => console.warn("queue sync failed:", err));
     return () => unsub();
   }, [loggedIn]);
+
+  // plans is the one place a local fallback (PLANS_DATA, declared near the
+  // top of the file) is still kept on purpose: it's pricing/product
+  // configuration rather than user or community data, and an empty pricing
+  // screen before the seed script runs would be a genuinely broken
+  // experience (no way to subscribe to anything). The seed script also
+  // seeds real plan docs, so in practice this fallback rarely matters once
+  // set up.
+  useEffect(() => {
+    if (!loggedIn) return;
+    const unsub = onSnapshot(collection(db, "plans"), snap => {
+      if (!snap.empty) setPlans(snap.docs.map(d => ({ key: d.id, ...d.data() })));
+    }, err => console.warn("plans sync failed:", err));
+    return () => unsub();
+  }, [loggedIn]);
+
+  // Unlike circles/members/queue, notifications start genuinely empty for a
+  // new user — there's no local mock fallback here, an empty inbox is the
+  // correct state, not a sign Firestore hasn't loaded yet.
+  useEffect(() => {
+    if (!loggedIn || !currentUser?.uid) return;
+    const unsub = onSnapshot(collection(db, "users", currentUser.uid, "notifications"), snap => {
+      const items = snap.docs.map(d => {
+        const data = d.data();
+        const created = data.createdAt?.toDate ? data.createdAt.toDate() : null;
+        return { id: d.id, ...data, time: created ? fmtTime(created) : "Just now", _sortMs: created ? created.getTime() : Date.now() };
+      }).sort((a,b) => b._sortMs - a._sortMs);
+      setNotifications(items);
+    }, err => console.warn("notifications sync failed:", err));
+    return () => unsub();
+  }, [loggedIn, currentUser?.uid]);
 
   // When a background push notification is tapped, sw.js focuses this tab
   // and posts a message naming which screen to jump to. This is the other
@@ -4211,9 +4263,13 @@ export default function App() {
   // toast banner, plays a short chime, gives a 100ms vibration, and best-effort
   // tries a real OS notification if permission was already granted. prefKey, if
   // given, gates the notification on the matching toggle in Notification
-  // Preferences; pass null to always send (e.g. support replies).
+  // Preferences; pass null to always send (e.g. support replies). Also
+  // best-effort persists to this user's own Firestore notifications
+  // subcollection so it survives reload and shows up on other devices —
+  // see notifyUser() above for the equivalent when notifying someone else.
   const pushNotification = (type, title, body, prefKey, targetScreen) => {
-    if (prefKey && notifPrefs[prefKey] === false) return;
+    const prefs = currentUser?.notifPrefs || NOTIF_PREF_DEFAULTS;
+    if (prefKey && prefs[prefKey] === false) return;
     const id = `n_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
     setNotifications(ns => [{ id, type, title, body, time:"Just now", unread:true }, ...ns]);
     setActiveToast({ id, type, title, body, targetScreen });
@@ -4224,6 +4280,11 @@ export default function App() {
         new Notification(title, { body });
       }
     } catch (e) { /* notifications unavailable in this environment */ }
+    if (currentUser?.uid) {
+      setDoc(doc(db, "users", currentUser.uid, "notifications", id), {
+        type, title, body, targetScreen: targetScreen || null, unread: true, createdAt: serverTimestamp(),
+      }).catch(e => console.warn("Failed to persist notification:", e));
+    }
   };
   const requestPushPermission = () => {
     try {
@@ -4236,23 +4297,101 @@ export default function App() {
   };
 
   // Instagram Auto-Reply add-on (€19/mo on top of any plan above Free).
-  const [autoReplyAddon, setAutoReplyAddon] = useState(false);
-  const [igConnection, setIgConnection] = useState(null);
-  const [automations, setAutomations] = useState(AUTOMATIONS_DATA);
-  const [safetySettings, setSafetySettings] = useState(SAFETY_DEFAULTS);
+  // autoReplyAddon/igConnection/automations/safetySettings are all derived
+  // from currentUser further up (with their setters writing through to
+  // Firestore) — nothing to declare here.
 
   const [supportTickets, setSupportTickets] = useState(SUPPORT_TICKETS_DATA);
 
-  // Resolve the signed-in person against the team roster to know their role and
-  // the name that should be attributed to any admin action they take.
-  const myStaff = team.find(t => t.email && currentUser?.email && t.email.toLowerCase()===currentUser.email.toLowerCase());
-  const actorName = currentUser ? (myStaff?.name || currentUser.name) : "Unknown";
-  const myRole = myStaff?.role || "Admin";
+  // Role comes directly from currentUser.role — the same field
+  // firestore.rules checks server-side — never from a fallback default.
+  // This is what actually closes the "anyone can reach the Admin screen"
+  // hole: previously this defaulted to "Admin" for anyone not found in a
+  // separate team list, which combined with no nav-level gating meant every
+  // signed-in member saw and could open the full Admin screen.
+  const actorName = currentUser?.name || "Unknown";
+  const myRole = roleLabel(currentUser?.role);
+  const isStaff = STAFF_ROLES.includes(currentUser?.role);
+  // Matches firestore.rules' isAdmin()/isSuperAdmin() exactly — isStaff
+  // above is intentionally broader (it includes "support", which can see
+  // the Admin screen shell but can't actually perform admin-only Firestore
+  // writes like approving queue items or managing the team).
+  const isAdminRole = ["moderator","admin","superadmin"].includes(currentUser?.role);
+  const isSuperAdmin = currentUser?.role === "superadmin";
+
+  // cashoutRequests: admins see every request (to process payouts); a
+  // regular member only ever queries their own, matching firestore.rules
+  // exactly — an unfiltered query would be rejected for non-admins since
+  // Firestore validates list queries against the rules at the query level,
+  // not per-document.
+  useEffect(() => {
+    if (!loggedIn || !currentUser?.uid) return;
+    const q = isAdminRole
+      ? collection(db, "cashoutRequests")
+      : query(collection(db, "cashoutRequests"), where("uid", "==", currentUser.uid));
+    const unsub = onSnapshot(q, snap => {
+      setCashoutRequests(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, err => console.warn("cashoutRequests sync failed:", err));
+    return () => unsub();
+  }, [loggedIn, currentUser?.uid, isAdminRole]);
+
+  // team and activityLog are both admin-only collections — only fetch them
+  // for staff, both to avoid a guaranteed permission-denied console warning
+  // for regular members and because there's no reason to subscribe to data
+  // a member's UI never shows.
+  useEffect(() => {
+    if (!loggedIn || !isSuperAdmin) return;
+    const unsub = onSnapshot(collection(db, "team"), snap => {
+      setTeam(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, err => console.warn("team sync failed:", err));
+    return () => unsub();
+  }, [loggedIn, isSuperAdmin]);
+
+  useEffect(() => {
+    if (!loggedIn || !isAdminRole) return;
+    const unsub = onSnapshot(collection(db, "activityLog"), snap => {
+      const items = snap.docs.map(d => {
+        const data = d.data();
+        const time = data.time?.toDate ? data.time.toDate() : (data.time ? new Date(data.time) : new Date());
+        return { id: d.id, ...data, time };
+      }).sort((a,b) => b.time - a.time);
+      setActivityLog(items);
+    }, err => console.warn("activityLog sync failed:", err));
+    return () => unsub();
+  }, [loggedIn, isAdminRole]);
+
   const logAction = (action, detail) => {
-    setActivityLog(log => [{ id:`log_${Date.now()}_${Math.random().toString(36).slice(2,6)}`, actor:actorName, action, detail, time:new Date() }, ...log]);
+    const entry = { actor:actorName, action, detail, time: new Date().toISOString() };
+    setActivityLog(log => [{ id:`log_${Date.now()}_${Math.random().toString(36).slice(2,6)}`, ...entry, time:new Date() }, ...log]);
+    // Best-effort persist to the Firestore audit log — local state above
+    // still updates optimistically so the Log tab feels instant.
+    setDoc(doc(collection(db, "activityLog")), entry).catch(e => console.warn("Failed to write activity log entry:", e));
   };
 
-  const addPoints = (n=1) => setPoints(p => Math.max(0, p + n));
+  // Self-service point-earning actions (confirming support on someone
+  // else's post, referral bonuses) are intentionally LOCAL-ONLY — see
+  // selfEditableFields() in firestore.rules for why points isn't in the
+  // self-editable allow-list: a direct client write has no way to verify
+  // the underlying action actually happened, so persisting it would let
+  // anyone inflate their own points from the browser console. Admin-driven
+  // point changes (MembersTab) DO persist for real, since those go through
+  // the isAdmin() path instead. A page refresh resets these to whatever's
+  // actually in Firestore.
+  const addPoints = (n=1) => setCurrentUser(u => u ? {...u, points: Math.max(0, (u.points||0) + n)} : u);
+
+  // Writes a real, persisted notification into someone else's notifications
+  // subcollection — used when an admin action (approving/rejecting a queue
+  // submission, replying to a support ticket, etc.) needs to notify the
+  // person it actually happened to, not the admin performing the action.
+  // No local toast/sound/haptics here, since this isn't the current
+  // browser's own notification.
+  const notifyUser = (uid, type, title, body, targetScreen) => {
+    if (!uid) return;
+    const id = `n_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+    setDoc(doc(db, "users", uid, "notifications", id), {
+      type, title, body, targetScreen: targetScreen || null, unread: true, createdAt: serverTimestamp(),
+    }).catch(e => console.warn("Failed to notify user:", e));
+  };
   const recordSubmission = circleKeys => {
     const now = Date.now();
     setLastSubmissionByCircle(prev => {
@@ -4286,6 +4425,7 @@ export default function App() {
         handle: updatedUser.handle,
         email: updatedUser.email,
         bio: updatedUser.bio,
+        contentType: updatedUser.contentType || "",
       });
     } catch (e) {
       console.warn("Failed to save profile to Firestore:", e);
@@ -4299,6 +4439,13 @@ export default function App() {
       await updateDoc(doc(db, "users", currentUser.uid), { plan: planName });
     } catch (e) {
       console.warn("Failed to save plan to Firestore:", e);
+    }
+  };
+
+  const handleMarkNotificationRead = (id) => {
+    setNotifications(ns => ns.map(n => n.id===id ? {...n, unread:false} : n));
+    if (currentUser?.uid) {
+      updateDoc(doc(db, "users", currentUser.uid, "notifications", id), { unread:false }).catch(e => console.warn("Failed to mark notification read:", e));
     }
   };
 
@@ -4340,7 +4487,7 @@ export default function App() {
             <div className="logo-text">Creator<b>Circle</b></div>
           </div>
           <div style={{display:"flex",gap:8}}>
-            {!["admin","pricing","editProfile","notifPrefs","autoreply","support","stats"].includes(screen) && (
+            {isStaff && !["admin","pricing","editProfile","notifPrefs","autoreply","support","stats"].includes(screen) && (
               <div className="icon-btn" title="Admin" onClick={()=>setScreen("admin")} style={{color:C.textMuted}}>
                 <Icon name="shield" size={17}/>
               </div>
@@ -4359,18 +4506,26 @@ export default function App() {
 
         {/* CONTENT */}
         <div className="content">
-          {screen==="home"        && <HomeScreen    onNav={setScreen} points={points} lastSubmissionByCircle={lastSubmissionByCircle} onSupport={addPoints} circles={circles} hasAutoReplyAddon={autoReplyAddon}/>}
-          {screen==="submit"      && <SubmitScreen  points={points} lastSubmissionByCircle={lastSubmissionByCircle} onSubmitPost={recordSubmission} circles={circles} setQueue={setQueue} currentUser={currentUser}/>}
+          {screen==="home"        && <HomeScreen    onNav={setScreen} points={currentUser?.points||0} lastSubmissionByCircle={lastSubmissionByCircle} onSupport={addPoints} circles={circles} hasAutoReplyAddon={autoReplyAddon}/>}
+          {screen==="submit"      && <SubmitScreen  points={currentUser?.points||0} lastSubmissionByCircle={lastSubmissionByCircle} onSubmitPost={recordSubmission} circles={circles} setQueue={setQueue} currentUser={currentUser}/>}
           {screen==="history"     && <HistoryScreen />}
-          {screen==="notifs"      && <NotificationsScreen notifications={notifications} setNotifications={setNotifications}/>}
+          {screen==="notifs"      && <NotificationsScreen notifications={notifications} onMarkRead={handleMarkNotificationRead}/>}
           {screen==="pricing"     && <PricingScreen plans={plans} currentUser={currentUser} hasAutoReplyAddon={autoReplyAddon} onToggleAddon={setAutoReplyAddon} onSelectPlan={handleSelectPlan} onNav={setScreen}/>}
           {screen==="editProfile" && <EditProfileScreen currentUser={currentUser} onSave={handleSaveProfile} onBack={()=>setScreen("profile")}/>}
           {screen==="notifPrefs"  && <NotificationPreferencesScreen prefs={notifPrefs} setPrefs={setNotifPrefs} pushPermission={pushPermission} requestPushPermission={requestPushPermission} pushNotification={pushNotification} onBack={()=>setScreen("profile")}/>}
           {screen==="autoreply"   && <AutoReplyScreen currentUser={currentUser} hasAddon={autoReplyAddon} onPurchaseAddon={setAutoReplyAddon} onNav={setScreen} igConnection={igConnection} onConnectIg={setIgConnection} onDisconnectIg={()=>setIgConnection(null)} automations={automations} setAutomations={setAutomations} safety={safetySettings} setSafety={setSafetySettings}/>}
           {screen==="support"     && <SupportScreen tickets={supportTickets} setTickets={setSupportTickets} currentUser={currentUser} pushNotification={pushNotification} onBack={()=>setScreen("profile")}/>}
-          {screen==="stats"       && <StatsScreen points={points} circles={circles} referrals={referrals} affiliates={affiliates} automations={automations} hasAutoReplyAddon={autoReplyAddon} currentUser={currentUser} onBack={()=>setScreen("profile")}/>}
-          {screen==="profile"     && <ProfileScreen onNav={setScreen} points={points} circles={circles} currentUser={currentUser} referrals={referrals} setReferrals={setReferrals} affiliates={affiliates} walletBalance={walletBalance} setWalletBalance={setWalletBalance} iban={iban} setIban={setIban} cashoutRequests={cashoutRequests} setCashoutRequests={setCashoutRequests} addPoints={addPoints} pushNotification={pushNotification} onLogout={handleLogout}/>}
-          {screen==="admin"       && <AdminScreen   queue={queue} setQueue={setQueue} members={members} setMembers={setMembers} circles={circles} setCircles={setCircles} plans={plans} setPlans={setPlans} cashoutRequests={cashoutRequests} setCashoutRequests={setCashoutRequests} addPoints={addPoints} team={team} setTeam={setTeam} activityLog={activityLog} logAction={logAction} myRole={myRole} actorName={actorName} supportTickets={supportTickets} setSupportTickets={setSupportTickets} pushNotification={pushNotification}/>}
+          {screen==="stats"       && <StatsScreen points={currentUser?.points||0} circles={circles} referrals={referrals} affiliates={affiliates} automations={automations} hasAutoReplyAddon={autoReplyAddon} currentUser={currentUser} onBack={()=>setScreen("profile")}/>}
+          {screen==="profile"     && <ProfileScreen onNav={setScreen} points={currentUser?.points||0} circles={circles} currentUser={currentUser} referrals={referrals} setReferrals={setReferrals} affiliates={affiliates} walletBalance={walletBalance} setWalletBalance={setWalletBalance} iban={iban} setIban={setIban} cashoutRequests={cashoutRequests} setCashoutRequests={setCashoutRequests} addPoints={addPoints} pushNotification={pushNotification} onLogout={handleLogout}/>}
+          {screen==="admin" && isStaff   && <AdminScreen   queue={queue} setQueue={setQueue} members={members} setMembers={setMembers} circles={circles} setCircles={setCircles} plans={plans} setPlans={setPlans} cashoutRequests={cashoutRequests} setCashoutRequests={setCashoutRequests} team={team} setTeam={setTeam} activityLog={activityLog} logAction={logAction} myRole={myRole} actorName={actorName} supportTickets={supportTickets} setSupportTickets={setSupportTickets} pushNotification={pushNotification} notifyUser={notifyUser}/>}
+          {screen==="admin" && !isStaff  && (
+            <div style={{textAlign:"center", padding:"60px 16px"}}>
+              <Icon name="shield" size={32} color={C.textMuted}/>
+              <div style={{fontSize:16, fontWeight:700, marginTop:14}}>Not authorized</div>
+              <div style={{fontSize:13, color:C.textMuted, marginTop:6}}>This area is for Creator Circle staff only.</div>
+              <button className="btn btn-ghost" style={{marginTop:18}} onClick={()=>setScreen("home")}>Back to home</button>
+            </div>
+          )}
         </div>
 
         {/* BOTTOM NAV — hidden on non-tab screens */}
