@@ -12,6 +12,7 @@ import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
 import { getFunctions, httpsCallable } from "firebase/functions";
 
 const firebaseConfig = {
@@ -35,6 +36,8 @@ export const auth = getAuth(app);
 // is called from LoginScreen.
 export const googleProvider = new GoogleAuthProvider();
 export const db = getFirestore(app);
+// Used for profile picture uploads (see uploadProfilePicture in App.jsx).
+export const storage = getStorage(app);
 export const functions = getFunctions(app);
 
 // Matches the savePushSubscription callable exported from
