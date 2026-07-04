@@ -1,0 +1,12 @@
+node_modules/
+
+# Local params / secrets — never commit real values.
+.env
+.env.*.local
+.env.local
+
+# Firebase Functions emulator/runtime artifacts
+.runtimeconfig.json
+firebase-debug.log
+firebase-debug.*.log
+ui-debug.log

@@ -36,12 +36,13 @@ const C = {
 };
 
 // ─── PUSH NOTIFICATIONS CONFIG ────────────────────────────────────────────────
-// Replace with a real VAPID public key generated for this project, e.g. via:
-//   npx web-push generate-vapid-keys
-// The matching private key stays server-side only (see push-cloud-function.js)
-// and must never be shipped in this file. This placeholder will not work —
-// pushManager.subscribe() will throw until a real key is set here.
-const VAPID_PUBLIC_KEY = "REPLACE_WITH_YOUR_VAPID_PUBLIC_KEY";
+// The VAPID public key comes from the build env (VITE_VAPID_PUBLIC_KEY — see
+// .env.example) rather than being hardcoded, so the same key can be managed
+// alongside the server's private key without editing source. Generate a pair
+// with `npx web-push generate-vapid-keys`; the matching private key stays
+// server-side only (functions' VAPID_PRIVATE secret). When this is unset,
+// subscribeToPush() no-ops instead of throwing — push is simply disabled.
+const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || "";
 
 // pushManager.subscribe() needs the VAPID key as a Uint8Array, not the
 // base64url string it's normally generated/shared as. Standard conversion.
@@ -4364,6 +4365,9 @@ export default function App() {
   const subscribeToPush = async () => {
     try {
       if (!("serviceWorker" in navigator) || !("PushManager" in window)) return null;
+      // No VAPID public key configured (VITE_VAPID_PUBLIC_KEY) — push is
+      // disabled for this build. Skip quietly rather than throwing.
+      if (!VAPID_PUBLIC_KEY) return null;
       const registration = await navigator.serviceWorker.ready;
       let sub = await registration.pushManager.getSubscription();
       if (!sub) {

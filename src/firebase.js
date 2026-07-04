@@ -38,9 +38,12 @@ export const googleProvider = new GoogleAuthProvider();
 export const db = getFirestore(app);
 // Used for profile picture uploads (see uploadProfilePicture in App.jsx).
 export const storage = getStorage(app);
-export const functions = getFunctions(app);
+// The Cloud Functions are deployed to europe-west1 (eur3-compatible — see the
+// REGION note in functions/index.js), so the client must target that region;
+// getFunctions(app) alone would call us-central1 and 404.
+export const functions = getFunctions(app, "europe-west1");
 
-// Matches the savePushSubscription callable exported from
-// push-cloud-function.js. Calling this is what subscribeToPush() in App.jsx
-// should do instead of just console.logging the subscription.
+// Matches the savePushSubscription callable exported from functions/index.js.
+// subscribeToPush() in App.jsx calls this to persist a browser's push
+// subscription server-side.
 export const savePushSubscription = httpsCallable(functions, "savePushSubscription");

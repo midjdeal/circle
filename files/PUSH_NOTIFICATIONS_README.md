@@ -5,13 +5,15 @@ when the app is closed. It's built from four pieces:
 
 | File | What it does |
 |---|---|
-| `creator-support-circle.jsx` | Registers the service worker, subscribes the browser to push, listens for tap-to-navigate messages |
-| `sw.js` | The service worker — receives pushes in the background and shows them |
-| `manifest.json` + `icon-192.png` / `icon-512.png` | Makes the app installable as a PWA (required for reliable background push, especially on mobile) |
-| `push-cloud-function.js` | The backend — actually sends the push, using Firebase Cloud Functions + the `web-push` library |
+| `src/App.jsx` | Registers the service worker, subscribes the browser to push, listens for tap-to-navigate messages |
+| `public/sw.js` | The service worker — receives pushes in the background and shows them |
+| `public/manifest.json` + `public/icon-192.png` / `public/icon-512.png` | Makes the app installable as a PWA (required for reliable background push, especially on mobile) |
+| `functions/index.js` | The backend — actually sends the push, using Cloud Functions (2nd gen) + the `web-push` library |
 
-Everything in the JSX file works as-is once deployed; the other three files
-need a few setup steps below before push actually delivers end-to-end.
+The browser side is fully wired: `subscribeToPush()` in `App.jsx` subscribes
+and persists the subscription via the `savePushSubscription` callable in
+`functions/index.js`. What's left is generating VAPID keys and providing them
+as config, then deploying the functions.
 
 ## 1. Generate VAPID keys
 
@@ -23,86 +25,74 @@ some random server that found the endpoint.
 npx web-push generate-vapid-keys
 ```
 
-This prints a public and private key. Put the **public** key into
-`creator-support-circle.jsx`:
+This prints a public and private key.
 
-```js
-const VAPID_PUBLIC_KEY = "paste-the-public-key-here";
-```
+- The **public** key ships to clients — put it in the web app's env as
+  `VITE_VAPID_PUBLIC_KEY` (see `.env.example`; copy to `.env.local`).
+- The **private** key stays server-side only — it goes into Cloud Secret
+  Manager in step 3, never into source or the client bundle.
 
-Keep the **private** key out of the client entirely — it goes into Cloud
-Functions config in step 3.
+## 2. Static files are already in place
 
-## 2. Host the static files at your domain root
+`manifest.json`, `sw.js`, and the icons already live in `public/`, and Vite
+copies everything there to the build output root untouched — so they're served
+from the domain root (e.g. `https://yourapp.com/sw.js`), which a service worker
+requires to control the whole app. `index.html` already links the manifest and
+sets the theme color. Nothing to do here.
 
-`manifest.json`, `sw.js`, `icon-192.png`, and `icon-512.png` all need to be
-served from the root of your domain (e.g. `https://yourapp.com/sw.js`, not
-`https://yourapp.com/assets/sw.js`). A service worker can only control pages
-within its own scope, so registering it from a subfolder would limit it to
-that subfolder.
+## 3. Configure and deploy the Cloud Functions
 
-In a typical Vite project: drop all four files into `/public` — Vite copies
-everything in `public/` to the build output root untouched.
-
-You'll also need to add these tags to your real `index.html` (not generated
-here, since this project has only ever consisted of the single JSX
-component file):
-
-```html
-<link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#0D0F1A">
-```
-
-## 3. Deploy the Cloud Function
+The functions are 2nd gen and read config through the params module
+(`firebase-functions/params`) — the old `functions.config()` API was removed in
+firebase-functions v7. Config splits into non-secret params and one secret:
 
 ```
 cd functions
-npm install web-push firebase-admin firebase-functions
-```
+npm install
 
-Move `push-cloud-function.js`'s contents into your `functions/index.js` (or
-`require`/import it from there), then set the private key and contact
-address Cloud Functions needs:
+# Non-secret params — copy the example and fill in the public key:
+cp .env.example .env
+#   VAPID_PUBLIC=<the public key from step 1>
+#   VAPID_SUBJECT=mailto:support@midjdeal.com
 
-```
-firebase functions:config:set \
-  vapid.public="your-public-key" \
-  vapid.private="your-private-key" \
-  vapid.subject="mailto:you@yourapp.com"
+# The private key is a Secret Manager secret (prompts for the value):
+firebase functions:secrets:set VAPID_PRIVATE
 
 firebase deploy --only functions
 ```
 
-## 4. Wire up subscription storage
+**Region:** both functions are pinned to `europe-west1` because the Firestore
+database is in the `eur3` multi-region (see `firebase.json`) and 2nd-gen
+Firestore triggers must run in a database-compatible region — the default
+`us-central1` would fail to deploy. The client calls the callable via
+`getFunctions(app, "europe-west1")` (see `src/firebase.js`) to match.
 
-`subscribeToPush()` in the JSX has a `TODO` where it should persist the
-subscription it gets back from the browser. The Cloud Function file exports
-a `savePushSubscription` callable for exactly this — call it from the app
-once you have your Firebase SDK wired in:
+## 4. How subscriptions and sends are already wired
 
-```js
-import { getFunctions, httpsCallable } from "firebase/functions";
-const save = httpsCallable(getFunctions(), "savePushSubscription");
-await save(sub.toJSON());
-```
-
-You'll also need your existing backend logic (wherever it currently fires
-`pushNotification(...)` client-side for things like "post approved" or
-"payout sent") to also write a doc to
-`users/{uid}/notifications/{notificationId}` — that's the trigger
-`sendPushOnNotification` listens for for the actual background send.
+- **Saving a subscription:** `subscribeToPush()` in `App.jsx` calls the
+  `savePushSubscription` callable, which writes to
+  `users/{uid}/pushSubscriptions/{subId}`. Client writes to that path are
+  denied by `firestore.rules` on purpose — only the callable (Admin SDK,
+  which bypasses rules) writes there.
+- **Sending a push:** the app's `notifyUser()` helper writes a doc to
+  `users/{uid}/notifications/{notificationId}` for the in-app notification.
+  The `sendPushOnNotification` trigger fires on that same write and fans the
+  notification out to every stored subscription for that user — so any event
+  that already produces an in-app notification also becomes a background push,
+  with no extra call site.
 
 ## What you can verify without deploying
 
 The service worker registration and push subscription flow can be tested
-locally over `https` (or `localhost`, which browsers treat as secure) — open
-dev tools, go to Notification Preferences, tap Enable, and check
+locally over `https` (or `localhost`, which browsers treat as secure), as long
+as `VITE_VAPID_PUBLIC_KEY` is set in `.env.local` — open dev tools, go to
+Notification Preferences, tap Enable, and check
 `Application → Service Workers` / `Application → Push Messaging` in Chrome
-DevTools to confirm a subscription was created.
+DevTools to confirm a subscription was created. With the key unset,
+`subscribeToPush()` intentionally no-ops (push disabled) instead of throwing.
 
 What you can't verify without deploying: actual delivery while the app is
-closed, since that requires a real backend at a real HTTPS domain to call
-`webpush.sendNotification()`. Once steps 1–4 above are done, sending a test
-notification from the Firebase console or a manual Firestore write to
-`users/{uid}/notifications/` is the fastest way to confirm the full pipeline
-works.
+closed, since that requires the deployed functions to call
+`webpush.sendNotification()`. Once steps 1–3 are done, a manual Firestore write
+to `users/{uid}/notifications/` (or any in-app action that calls
+`notifyUser()`) is the fastest way to confirm the full pipeline works.
