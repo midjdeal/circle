@@ -2949,6 +2949,46 @@ function QueueTab({ queue, setQueue, circles, logAction, actorName, pushNotifica
     }
   };
 
+  // Demo seeding: drop a batch of already-approved posts straight into the
+  // live feed so there's something for members to support without waiting for
+  // real submissions to come through the queue. Each doc is written with
+  // status:"approved" (so App's approvedPosts sync picks it up and it shows on
+  // Home) and a non-real submitterUid (so it isn't filtered out as "your own
+  // post" and confirming support against it stays valid). Marked seeded:true
+  // so a cleanup pass can find them later. Admin-only — QueueTab only renders
+  // for staff.
+  const SEED_POOL = [
+    { handle:"@wanderlens",     type:"Reel",     topic:"Sunrise hike above the clouds — Dolomites" },
+    { handle:"@theplantedplate",type:"Carousel", topic:"5 high-protein vegan lunches under 400 kcal" },
+    { handle:"@mattbuildsit",   type:"Reel",     topic:"DIY floating oak desk — full build" },
+    { handle:"@sofia.styles",   type:"Static",   topic:"Capsule wardrobe: 12 pieces, 30 outfits" },
+    { handle:"@dawn.paints",    type:"Reel",     topic:"Loose watercolor poppies — real-time" },
+    { handle:"@codewithren",    type:"Carousel", topic:"React hooks cheat sheet for beginners" },
+  ];
+  const seedFeed = () => {
+    if (!window.confirm(`Add ${SEED_POOL.length} demo posts to the live feed for members to support?`)) return;
+    const now = Date.now();
+    const base = circles.length ? circles.map(c=>c.name) : ["Circle A"];
+    const counts = [4, 11, 7, 18, 2, 14];
+    const plansCycle = ["Free","Plus","Pro"];
+    const items = SEED_POOL.map((p, i) => {
+      const id = `seed_${now}_${i}`;
+      return {
+        id, status:"approved", handle:p.handle, type:p.type, topic:p.topic,
+        circle: base[i % base.length],
+        url:`https://www.instagram.com/p/CCdemo${now.toString(36)}${i}/`,
+        plan: plansCycle[i % plansCycle.length],
+        submitterUid:`seeduid_${now}_${i}`, submitterName:p.handle,
+        confirmedCount: counts[i % counts.length], confirmedBy:[],
+        submitted:"Just now", submittedAt: now - i*3600*1000,
+        decidedAt: serverTimestamp(), seeded:true,
+      };
+    });
+    items.forEach(it => setDoc(doc(db, "queue", it.id), it).catch(e => console.warn("Failed to seed feed post:", e)));
+    logAction && logAction("Seeded demo feed", `${items.length} approved posts across ${base.length} circle(s)`);
+    pushNotification && pushNotification("sparkle", "Demo feed seeded", `${items.length} posts added to the live feed to support.`, null, "home");
+  };
+
   const types = ["Reel","Carousel","Static","Story","Other"];
   const circleOpts = circles.map(c=>c.name);
   const planOpts = ["Free","Plus","Pro"];
@@ -2986,6 +3026,10 @@ function QueueTab({ queue, setQueue, circles, logAction, actorName, pushNotifica
         <span className="sec-title"><Icon name="list" size={13} color={C.textMuted}/> Review queue</span>
         <span className="sec-action" onClick={startAdd}>+ Add</span>
       </div>
+
+      <button className="btn-dashed" style={{marginBottom:10}} onClick={seedFeed}>
+        <Icon name="sparkle" size={13} color={C.accent}/> Seed demo posts to support
+      </button>
 
       <div className="field" style={{marginBottom:9}}>
         <input className="field-inp" placeholder="Search by handle or topic..." value={search} onChange={e=>{setSearch(e.target.value); setPage(1);}}/>
