@@ -2989,6 +2989,25 @@ function QueueTab({ queue, setQueue, circles, logAction, actorName, pushNotifica
     pushNotification && pushNotification("sparkle", "Demo feed seeded", `${items.length} posts added to the live feed to support.`, null, "home");
   };
 
+  // Companion cleanup: delete every post created by seedFeed (tagged
+  // seeded:true), regardless of status. These live in Firestore as approved
+  // posts, so they aren't in the local `queue` prop (which only holds pending
+  // items) — fetch them by the seeded flag and delete each, then also drop any
+  // seeded rows still present locally.
+  const removeSeeded = async () => {
+    if (!window.confirm("Remove all demo (seeded) posts from the feed?")) return;
+    try {
+      const snap = await getDocs(query(collection(db, "queue"), where("seeded", "==", true)));
+      await Promise.all(snap.docs.map(d => deleteDoc(doc(db, "queue", d.id))));
+      setQueue(q => q.filter(i => !i.seeded));
+      logAction && logAction("Removed demo feed", `${snap.size} seeded post(s) deleted`);
+      pushNotification && pushNotification("check", "Demo feed cleared", `${snap.size} seeded post${snap.size===1?"":"s"} removed.`, null, "admin");
+    } catch (e) {
+      console.warn("Failed to remove seeded posts:", e);
+      pushNotification && pushNotification("x", "Couldn't clear demo feed", "The removal didn't complete — check the console.", null, "admin");
+    }
+  };
+
   const types = ["Reel","Carousel","Static","Story","Other"];
   const circleOpts = circles.map(c=>c.name);
   const planOpts = ["Free","Plus","Pro"];
@@ -3027,9 +3046,14 @@ function QueueTab({ queue, setQueue, circles, logAction, actorName, pushNotifica
         <span className="sec-action" onClick={startAdd}>+ Add</span>
       </div>
 
-      <button className="btn-dashed" style={{marginBottom:10}} onClick={seedFeed}>
-        <Icon name="sparkle" size={13} color={C.accent}/> Seed demo posts to support
-      </button>
+      <div style={{display:"flex", gap:8, marginBottom:10}}>
+        <button className="btn-dashed" style={{flex:1}} onClick={seedFeed}>
+          <Icon name="sparkle" size={13} color={C.accent}/> Seed demo posts
+        </button>
+        <button className="btn-dashed" style={{flex:1}} onClick={removeSeeded}>
+          <Icon name="trash" size={13} color={C.textMuted}/> Remove demo posts
+        </button>
+      </div>
 
       <div className="field" style={{marginBottom:9}}>
         <input className="field-inp" placeholder="Search by handle or topic..." value={search} onChange={e=>{setSearch(e.target.value); setPage(1);}}/>
